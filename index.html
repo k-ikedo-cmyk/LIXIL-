@@ -7,7 +7,7 @@
 <style>
 :root{
   --bg:#E9EDF0; --panel:#FFFFFF; --ink:#16212B; --sub:#5B6B79; --line:#D3DAE0;
-  --in:#2D7A4C; --out:#B23F2B; --adj:#6F6420; --mute:#A7B2BC;
+  --in:#2D7A4C; --out:#B23F2B; --adj:#6F6420; --inv:#1F5A8C; --mute:#A7B2BC;
 }
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--ink);
@@ -41,24 +41,30 @@ h1{font-size:15px;margin:0;font-weight:700;white-space:nowrap}
 .tag{font-size:12px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:6px;vertical-align:2px}
 .tag.欠品{background:#F6DAD4;color:var(--out)}
 .tag.不足{background:#F5E9C8;color:#7A5A00}
+#list li.grp{background:#DCE2E7;font-weight:700;font-size:17px;padding:13px 14px;border-bottom:1px solid #C5CDD4;position:sticky;top:var(--hdr,98px);z-index:2}
+#list li.grp:active{background:#CFD6DC}
+.caret{display:inline-block;width:1em;transition:transform .12s;color:var(--sub)}
+.grp.open .caret{transform:rotate(90deg)}
+.gmeta{margin-left:auto;font-size:13px;font-weight:400;color:var(--sub)}
 .empty{padding:40px 16px;text-align:center;color:var(--sub);cursor:default!important}
 
 /* 登録シート */
 #mask{position:fixed;inset:0;background:#0007;opacity:0;pointer-events:none;transition:opacity .15s;z-index:10}
 #mask.on{opacity:1;pointer-events:auto}
-#sheet{position:fixed;left:0;right:0;bottom:0;z-index:11;background:var(--panel);border-radius:14px 14px 0 0;
+#sheet,#adm{position:fixed;left:0;right:0;bottom:0;z-index:11;background:var(--panel);border-radius:14px 14px 0 0;
   padding:16px 16px calc(16px + env(safe-area-inset-bottom));max-width:640px;margin:0 auto;
   transform:translateY(105%);transition:transform .18s ease-out;max-height:92vh;overflow-y:auto}
-#sheet.on{transform:none}
+#sheet.on,#adm.on{transform:none}
 .sh-head{display:flex;gap:12px;align-items:flex-start}
 .now{margin-left:auto;text-align:right}
 .now b{display:block;font-size:44px;line-height:1;font-variant-numeric:tabular-nums}
 .now small{font-size:12px;color:var(--sub)}
-.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:16px 0 12px}
-.seg button{padding:12px 0;font-size:17px;font-weight:700;border:2px solid var(--line);background:#fff;border-radius:10px;color:var(--sub)}
+.seg{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:16px 0 12px}
+.seg button{padding:12px 0;font-size:16px;font-weight:700;border:2px solid var(--line);background:#fff;border-radius:10px;color:var(--sub)}
 .seg button.on[data-t="入庫"]{background:var(--in);border-color:var(--in);color:#fff}
 .seg button.on[data-t="出庫"]{background:var(--out);border-color:var(--out);color:#fff}
 .seg button.on[data-t="調整"]{background:var(--adj);border-color:var(--adj);color:#fff}
+.seg button.on[data-t="棚卸"]{background:var(--inv);border-color:var(--inv);color:#fff}
 .step{display:grid;grid-template-columns:72px 1fr 72px;gap:8px}
 .step button{font-size:30px;border:0;border-radius:10px;background:#E4E9ED;height:64px}
 #num{font-size:34px;font-weight:700;text-align:center;border:2px solid var(--line);border-radius:10px;width:100%;font-variant-numeric:tabular-nums}
@@ -69,11 +75,30 @@ h1{font-size:15px;margin:0;font-weight:700;white-space:nowrap}
 #save{width:100%;margin-top:12px;padding:16px;border:0;border-radius:10px;font-size:19px;font-weight:700;color:#fff;background:var(--in)}
 #sheet[data-t="出庫"] #save{background:var(--out)}
 #sheet[data-t="調整"] #save{background:var(--adj)}
+#sheet[data-t="棚卸"] #save{background:var(--inv)}
 #cancel{width:100%;margin-top:6px;padding:10px;border:0;background:none;color:var(--sub);font-size:15px}
 details{margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
 summary{font-size:14px;color:var(--sub);padding:6px 0}
 #hlist{list-style:none;margin:0;padding:0;font-size:14px}
-#hlist li{display:grid;grid-template-columns:86px 40px 44px 1fr;gap:6px;padding:6px 0;border-bottom:1px solid #EEF1F3}
+#hlist li{display:grid;grid-template-columns:82px 36px 72px 1fr;gap:6px;padding:6px 0;border-bottom:1px solid #EEF1F3}
+.fix{grid-column:1/-1;justify-self:end;border:1px solid var(--line);background:#fff;border-radius:6px;padding:4px 10px;font-size:13px;color:var(--sub)}
+.pend{grid-column:1/-1;justify-self:end;font-style:normal;font-size:13px;color:#7A5A00;background:#F5E9C8;padding:2px 8px;border-radius:4px}
+#hlist li.fixform{display:flex;flex-wrap:wrap;gap:6px;align-items:center;background:#F4F6F8;padding:8px;border-radius:8px}
+.fixform input{padding:8px;border:2px solid var(--line);border-radius:8px;font-size:16px;min-width:0}
+.fixform .fq{width:80px}.fixform .fr{flex:1 1 140px}
+.fixform button{padding:8px 12px;border:0;border-radius:8px;font-size:15px}
+.fixform .go{background:var(--ink);color:#fff}
+#reqBtn{border:1px solid #ffffff55;background:none;color:#fff;padding:5px 12px;border-radius:999px;font-size:14px;white-space:nowrap}
+#reqN{display:inline-block;min-width:1.4em;margin-left:4px;padding:0 5px;border-radius:999px;background:#E8A33A;color:#16212B;font-weight:700;font-size:12px}
+#reqN:empty{display:none}
+.adm-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.adm-h h2{font-size:18px;margin:0}
+#alist{list-style:none;margin:0;padding:0}
+#alist li{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px}
+#alist .chg{font-size:18px;font-weight:700;margin:4px 0;font-variant-numeric:tabular-nums}
+#alist .btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+#alist .btns button{padding:11px;border:0;border-radius:8px;font-size:16px;font-weight:700}
+#alist .ok{background:var(--in);color:#fff}#alist .ng{background:#E4E9ED}
 #hlist .q{text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
 
 /* トースト */
@@ -96,6 +121,7 @@ summary{font-size:14px;color:var(--sub);padding:6px 0}
     <button class="chip" data-f="stock">在庫あり</button>
     <button class="chip" data-f="zero">在庫0</button>
     <button class="chip" data-f="short">不足</button>
+    <button id="reqBtn">変更依頼<span id="reqN"></span></button>
     <span id="count"></span>
   </div>
 </header>
@@ -112,6 +138,7 @@ summary{font-size:14px;color:var(--sub);padding:6px 0}
     <button data-t="入庫" class="on">入庫</button>
     <button data-t="出庫">出庫</button>
     <button data-t="調整">調整</button>
+    <button data-t="棚卸">棚卸</button>
   </div>
   <div class="step">
     <button id="minus" aria-label="1減らす">−</button>
@@ -126,6 +153,12 @@ summary{font-size:14px;color:var(--sub);padding:6px 0}
   <button id="save">入庫を登録</button>
   <button id="cancel">閉じる</button>
   <details id="hist"><summary>この品番の最近の履歴</summary><ul id="hlist"></ul></details>
+</section>
+
+<section id="adm" aria-hidden="true">
+  <div class="adm-h"><h2>変更依頼の承認</h2><span id="aStaff" class="meta"></span></div>
+  <ul id="alist"></ul>
+  <button id="admClose" style="width:100%;padding:10px;border:0;background:none;color:var(--sub);font-size:15px">閉じる</button>
 </section>
 
 <div id="toast"></div>
@@ -178,18 +211,45 @@ function pass(it){
   return true;
 }
 
+const openGroups = new Set();
+try { JSON.parse(localStorage.getItem('zaiko_groups') || '[]').forEach(g => openGroups.add(g)); } catch(e) {}
+const grpOf = it => it.hb.slice(0, 4);
+
+function rowHtml(it){
+  const j = judge(it);
+  const cls = it.stock < 0 ? 'neg' : it.stock === 0 ? 'zero' : '';
+  return `<li data-id="${esc(it.id)}">
+    <div><div class="hb">${esc(it.hb)}${j && j !== '欠品' ? `<span class="tag ${j}">${j}</span>` : ''}</div>
+    <div class="meta">${esc(it.cat)}　${esc(it.w)}×${esc(it.h)}${it.target != null ? '　適正 ' + it.target : ''}</div></div>
+    <div class="qty ${cls}">${it.stock}</div></li>`;
+}
+
 function render(){
   const q = norm($('#q').value);
   const rows = items.filter(it => (!q || it.key.includes(q)) && pass(it));
   $('#count').textContent = rows.length + '件';
-  $('#list').innerHTML = rows.length ? rows.map(it => {
-    const j = judge(it);
-    const cls = it.stock < 0 ? 'neg' : it.stock === 0 ? 'zero' : '';
-    return `<li data-id="${esc(it.id)}">
-      <div><div class="hb">${esc(it.hb)}${j && j !== '欠品' ? `<span class="tag ${j}">${j}</span>` : ''}</div>
-      <div class="meta">${esc(it.cat)}　${esc(it.w)}×${esc(it.h)}${it.target != null ? '　適正 ' + it.target : ''}</div></div>
-      <div class="qty ${cls}">${it.stock}</div></li>`;
-  }).join('') : '<li class="empty">該当する品番がありません。検索語を短くするか、絞り込みを「すべて」にしてください。</li>';
+  if (!rows.length) {
+    $('#list').innerHTML = '<li class="empty">該当する品番がありません。検索語を短くするか、絞り込みを「すべて」にしてください。</li>';
+    return;
+  }
+  const groups = new Map();
+  rows.forEach(it => { const g = grpOf(it); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(it); });
+  const keys = [...groups.keys()].sort();
+  let html = '';
+  keys.forEach(g => {
+    const list = groups.get(g);
+    const open = q ? true : openGroups.has(g);
+    const total = list.reduce((s, it) => s + Math.max(0, it.stock), 0);
+    html += `<li class="grp${open ? ' open' : ''}" data-g="${esc(g)}"><span class="caret">▸</span>${esc(g)}<span class="gmeta">${list.length}品番　在庫計 ${total}</span></li>`;
+    if (open) html += list.map(rowHtml).join('');
+  });
+  $('#list').innerHTML = html;
+}
+function toggleGroup(g){
+  if ($('#q').value) return;
+  openGroups.has(g) ? openGroups.delete(g) : openGroups.add(g);
+  try { localStorage.setItem('zaiko_groups', JSON.stringify([...openGroups])); } catch(e) {}
+  render();
 }
 
 /* 登録シート */
@@ -217,30 +277,39 @@ function setType(t){
   type = t;
   document.querySelectorAll('#seg button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
   $('#sheet').dataset.t = t;
-  if (t !== '調整' && !(parseInt($('#num').value, 10) >= 1)) $('#num').value = 1;
+  if (t === '棚卸') $('#num').value = cur.stock < 0 ? 0 : cur.stock;
+  else if (t !== '調整' && !(parseInt($('#num').value, 10) >= 1)) $('#num').value = 1;
   update();
 }
 function delta(){
   const n = parseInt($('#num').value, 10) || 0;
+  if (type === '棚卸') return n - cur.stock;
   return type === '出庫' ? -n : n;
 }
 function update(){
   const after = cur.stock + delta();
   const p = $('#preview');
-  p.textContent = `登録後の在庫　${cur.stock} → ${after}`;
+  if (type === '棚卸') {
+    const d = after - cur.stock;
+    p.textContent = `帳簿 ${cur.stock} → 実数 ${after}（差異 ${d > 0 ? '+' : ''}${d}）`;
+  } else {
+    p.textContent = `登録後の在庫　${cur.stock} → ${after}`;
+  }
   p.classList.toggle('neg', after < 0);
   $('#save').textContent = `${type}を登録`;
 }
 function step(d){
-  const min = type === '調整' ? -9999 : 1;
+  const min = type === '調整' ? -9999 : type === '棚卸' ? 0 : 1;
   $('#num').value = Math.max(min, (parseInt($('#num').value, 10) || 0) + d);
   update();
 }
 
 function save(){
   const qty = parseInt($('#num').value, 10);
-  if (!qty) return toast('数量を入力してください', true);
-  if (type !== '調整' && qty < 1) return toast('入庫・出庫の数量は1以上にしてください', true);
+  if (isNaN(qty)) return toast('数量を入力してください', true);
+  if (type === '棚卸' && qty < 0) return toast('棚卸数量は0以上にしてください', true);
+  if ((type === '入庫' || type === '出庫') && qty < 1) return toast('入庫・出庫の数量は1以上にしてください', true);
+  if (type === '調整' && qty === 0) return toast('調整数量を入力してください', true);
   const it = cur, d = delta(), after = it.stock + d;
   if (after < 0 && !confirm(`在庫が ${after} になります。登録しますか？`)) return;
 
@@ -265,7 +334,9 @@ function loadHistory(){
     .then(rows => {
       $('#hlist').dataset.id = id;
       $('#hlist').innerHTML = rows.length ? rows.map(r =>
-        `<li><span>${esc(r.d)}</span><span>${esc(r.t)}</span><span class="q">${esc(r.q)}</span><span>${esc(r.s)} ${esc(r.n)}</span></li>`
+        `<li><span>${esc(r.d)}</span><span>${esc(r.t)}</span><span class="q">${esc(r.q)}</span><span>${esc(r.s)} ${esc(r.n)}</span>${
+          r.pend ? '<em class="pend">変更依頼中</em>'
+                 : `<button class="fix" data-rec="${esc(r.rec)}" data-q="${esc(r.qr)}" data-t="${esc(r.t)}">修正を依頼</button>`}</li>`
       ).join('') : '<li>この品番の履歴はまだありません</li>';
     })
     .catch(e => $('#hlist').innerHTML = `<li>履歴を読み込めませんでした：${esc(e.message)}</li>`);
@@ -286,11 +357,95 @@ function reload(silent, fresh){
   $('#reload').disabled = true;
   apiGet(fresh ? { action: 'boot', fresh: '1' } : { action: 'boot' })
     .then(d => {
-      start(d); saveCache(); lastLoad = Date.now();
+      start(d); saveCache(); lastLoad = Date.now(); refreshReqCount();
       if (!silent) toast('最新の在庫を読み込みました');
     })
     .catch(e => toast(`読み込めませんでした：${e.message}`, true))
     .finally(() => { $('#reload').disabled = false; });
+}
+
+/* ===== 変更依頼 ===== */
+function openFixForm(btn){
+  document.querySelectorAll('#hlist .fixform').forEach(f => f.remove());
+  const li = btn.closest('li');
+  const t = btn.dataset.t;
+  const f = document.createElement('li');
+  f.className = 'fixform';
+  f.innerHTML = `<span class="meta">${esc(t)}の正しい数量</span>
+    <input class="fq" type="number" inputmode="numeric" value="${esc(btn.dataset.q)}">
+    <input class="fr" placeholder="理由（例 数え間違い）">
+    <button class="go">依頼する</button><button class="no">やめる</button>`;
+  li.after(f);
+  f.querySelector('.fq').select();
+  f.querySelector('.no').onclick = () => f.remove();
+  f.querySelector('.go').onclick = () => sendFix(btn.dataset.rec, btn.dataset.q, t, f);
+}
+function sendFix(rec, oldQ, t, f){
+  const v = f.querySelector('.fq').value.trim(), reason = f.querySelector('.fr').value.trim();
+  const n = parseInt(v, 10);
+  if (v === '' || isNaN(n)) return toast('正しい数量を入力してください', true);
+  if (t !== '調整' && n < 0) return toast('数量は0以上にしてください', true);
+  if (String(n) === String(oldQ)) return toast('元の数量と同じです', true);
+  if (!reason) return toast('理由を入力してください', true);
+  const go = f.querySelector('.go'); go.disabled = true; go.textContent = '送信中…';
+  apiPost({ action: 'request', recId: rec, newQty: n, reason, staff: $('#staff').value })
+    .then(() => {
+      toast('変更依頼を送りました。承認されると在庫に反映されます');
+      $('#hlist').dataset.id = ''; loadHistory(); refreshReqCount();
+    })
+    .catch(e => { go.disabled = false; go.textContent = '依頼する'; toast(`依頼できませんでした：${e.message}`, true); });
+}
+
+let adminPin = '';
+function refreshReqCount(){
+  apiGet({ action: 'requests' })
+    .then(list => { $('#reqN').textContent = list.length || ''; if ($('#adm').classList.contains('on')) renderReqs(list); })
+    .catch(() => {});
+}
+function openAdmin(){
+  try { adminPin = localStorage.getItem('zaiko_pin') || ''; } catch(e) {}
+  if (!adminPin) {
+    adminPin = (prompt('管理者PINを入力してください') || '').trim();
+    if (!adminPin) return;
+  }
+  $('#aStaff').textContent = '処理者：' + $('#staff').value;
+  $('#alist').innerHTML = '<li>読み込み中…</li>';
+  $('#mask').classList.add('on');
+  $('#adm').classList.add('on');
+  $('#adm').setAttribute('aria-hidden', 'false');
+  refreshReqCount();
+}
+function closeAdmin(){
+  $('#adm').classList.remove('on');
+  $('#adm').setAttribute('aria-hidden', 'true');
+  if (!$('#sheet').classList.contains('on')) $('#mask').classList.remove('on');
+}
+function renderReqs(list){
+  $('#alist').innerHTML = list.length ? list.map(r => `<li data-req="${esc(r.reqId)}">
+    <div class="hb">${esc(r.hb)}</div>
+    <div class="chg">${esc(r.t)}　${esc(r.from)} → ${esc(r.to)}</div>
+    <div class="meta">理由：${esc(r.reason)}</div>
+    <div class="meta">${esc(r.by)}　${esc(r.d)}　${esc(r.recId)}</div>
+    <div class="btns"><button class="ok">承認して反映</button><button class="ng">却下</button></div></li>`).join('')
+    : '<li class="meta">未処理の変更依頼はありません</li>';
+}
+function decide(li, decision){
+  li.querySelectorAll('button').forEach(b => b.disabled = true);
+  apiPost({ action: 'approve', reqId: li.dataset.req, decision, pin: adminPin, staff: $('#staff').value })
+    .then(r => {
+      try { localStorage.setItem('zaiko_pin', adminPin); } catch(e) {}
+      if (r.id && byId[r.id]) { byId[r.id].stock = r.stock; render(); saveCache(); }
+      li.remove();
+      const left = document.querySelectorAll('#alist li[data-req]').length;
+      if (!left) renderReqs([]);
+      $('#reqN').textContent = left || '';
+      toast(decision === '承認' ? `承認しました${r.id ? '　在庫：' + r.stock : ''}` : '却下しました');
+    })
+    .catch(e => {
+      li.querySelectorAll('button').forEach(b => b.disabled = false);
+      if (/PIN/.test(e.message)) { adminPin = ''; try { localStorage.removeItem('zaiko_pin'); } catch(x) {} closeAdmin(); }
+      toast(`処理できませんでした：${e.message}`, true);
+    });
 }
 
 let tt;
@@ -320,8 +475,11 @@ $('#chips').addEventListener('click', e => {
   render();
 });
 $('#list').addEventListener('click', e => {
+  const g = e.target.closest('li.grp'); if (g) return toggleGroup(g.dataset.g);
   const li = e.target.closest('li[data-id]'); if (li) openSheet(byId[li.dataset.id]);
 });
+const fitHeader = () => document.documentElement.style.setProperty('--hdr', document.querySelector('header').offsetHeight + 'px');
+fitHeader(); window.addEventListener('resize', fitHeader);
 $('#seg').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setType(b.dataset.t); });
 $('#minus').addEventListener('click', () => step(-1));
 $('#plus').addEventListener('click', () => step(1));
@@ -329,10 +487,18 @@ $('#num').addEventListener('input', update);
 $('#num').addEventListener('focus', e => e.target.select());
 $('#save').addEventListener('click', save);
 $('#cancel').addEventListener('click', closeSheet);
-$('#mask').addEventListener('click', closeSheet);
+$('#mask').addEventListener('click', () => { closeSheet(); closeAdmin(); });
+$('#hlist').addEventListener('click', e => { const b = e.target.closest('.fix'); if (b) openFixForm(b); });
+$('#reqBtn').addEventListener('click', openAdmin);
+$('#admClose').addEventListener('click', closeAdmin);
+$('#alist').addEventListener('click', e => {
+  const li = e.target.closest('li[data-req]'); if (!li) return;
+  if (e.target.closest('.ok')) decide(li, '承認');
+  else if (e.target.closest('.ng') && confirm('この依頼を却下しますか？')) decide(li, '却下');
+});
 $('#hist').addEventListener('toggle', loadHistory);
 $('#reload').addEventListener('click', () => reload(false, true));
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeSheet(); closeAdmin(); } });
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && Date.now() - lastLoad > 60000) reload(true);
 });
