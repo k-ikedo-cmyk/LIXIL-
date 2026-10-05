@@ -1,8 +1,9 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<base target="_top">
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LIXIL在庫</title>
 <style>
 :root{
   --bg:#E9EDF0; --panel:#FFFFFF; --ink:#16212B; --sub:#5B6B79; --line:#D3DAE0;
@@ -129,14 +130,37 @@ summary{font-size:14px;color:var(--sub);padding:6px 0}
 
 <div id="toast"></div>
 
-<script type="application/json" id="boot"><?!= boot ?></script>
 <script>
+/* ===== 設定：デプロイ後にここを書き換える ===== */
+const API_URL = 'https://script.google.com/macros/s/AKfycbxGTvehfVox-Jbh9Fr3hgt8xjyfWxwz3iKwddnN_Wv1BGHUgrt01kMxn-XbhcQqn2kv/exec';
+const API_KEY = 'yasumoku-zaiko';   /* Code.gs の API_KEY と同じ文字列 */
+/* ============================================ */
+
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const norm = s => String(s).replace(/[！-～]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
   .toUpperCase().replace(/[\s\-\/]/g, '');
+const CACHE_KEY = 'zaiko_cache_v1';
 
-let items = [], byId = {}, filter = 'all', cur = null, type = '入庫', lastLoad = Date.now();
+let items = [], byId = {}, filter = 'all', cur = null, type = '入庫', lastLoad = 0, staffList = [];
+
+/* 通信 */
+async function apiGet(params){
+  const q = new URLSearchParams(Object.assign({}, params, { key: API_KEY }));
+  const r = await fetch(API_URL + '?' + q.toString());
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error);
+  return j.data;
+}
+async function apiPost(body){
+  const r = await fetch(API_URL, { method: 'POST', body: JSON.stringify(Object.assign({}, body, { key: API_KEY })) });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error);
+  return j.data;
+}
+function saveCache(){
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify({ items, staff: staffList })); } catch(e) {}
+}
 
 function prep(list){
   items = list.map(it => (it.key = norm(it.hb + ' ' + it.cat), it));
@@ -178,6 +202,7 @@ function openSheet(it){
   $('#note').value = '';
   $('#hist').open = false;
   $('#hlist').innerHTML = '';
+  $('#hlist').dataset.id = '';
   setType('入庫');
   $('#mask').classList.add('on');
   $('#sheet').classList.add('on');
@@ -222,42 +247,50 @@ function save(){
   const staff = $('#staff').value, note = $('#note').value.trim(), t = type;
   try { localStorage.setItem('zaiko_staff', staff); } catch(e) {}
 
-  // 先に画面へ反映（待ち時間ゼロ）→ 裏でシートへ保存
+  /* 先に画面へ反映（待ち時間ゼロ）→ 裏でシートへ保存 */
   it.stock = after;
-  closeSheet(); render();
+  closeSheet(); render(); saveCache();
   toast(`${t}を登録中…`);
 
-  google.script.run
-    .withSuccessHandler(r => { it.stock = r.stock; render(); toast(`${t}を登録しました　${it.hb}：${r.stock}`); })
-    .withFailureHandler(e => { it.stock -= d; render(); toast(`登録できませんでした：${e.message}`, true); })
-    .register({ id: it.id, type: t, qty, staff, note });
+  apiPost({ id: it.id, type: t, qty, staff, note })
+    .then(r => { it.stock = r.stock; render(); saveCache(); toast(`${t}を登録しました　${it.hb}：${r.stock}`); })
+    .catch(e => { it.stock -= d; render(); saveCache(); toast(`登録できませんでした：${e.message}`, true); });
 }
 
 function loadHistory(){
   if (!$('#hist').open || $('#hlist').dataset.id === cur.id) return;
   const id = cur.id;
   $('#hlist').innerHTML = '<li>読み込み中…</li>';
-  google.script.run
-    .withSuccessHandler(rows => {
+  apiGet({ action: 'history', id })
+    .then(rows => {
       $('#hlist').dataset.id = id;
       $('#hlist').innerHTML = rows.length ? rows.map(r =>
         `<li><span>${esc(r.d)}</span><span>${esc(r.t)}</span><span class="q">${esc(r.q)}</span><span>${esc(r.s)} ${esc(r.n)}</span></li>`
       ).join('') : '<li>この品番の履歴はまだありません</li>';
     })
-    .withFailureHandler(e => $('#hlist').innerHTML = `<li>履歴を読み込めませんでした：${esc(e.message)}</li>`)
-    .getHistory(id);
+    .catch(e => $('#hlist').innerHTML = `<li>履歴を読み込めませんでした：${esc(e.message)}</li>`);
+}
+
+function start(boot){
+  staffList = boot.staff || [];
+  const sel = $('#staff'), keep = sel.value;
+  sel.innerHTML = staffList.map(s => `<option>${esc(s)}</option>`).join('');
+  let pick = keep;
+  if (!pick) { try { pick = localStorage.getItem('zaiko_staff'); } catch(e) {} }
+  if (pick && staffList.includes(pick)) sel.value = pick;
+  prep(boot.items || []);
+  render();
 }
 
 function reload(silent){
   $('#reload').disabled = true;
-  google.script.run
-    .withSuccessHandler(d => {
-      prep(d); lastLoad = Date.now(); render();
-      $('#reload').disabled = false;
+  apiGet({ action: 'boot' })
+    .then(d => {
+      start(d); saveCache(); lastLoad = Date.now();
       if (!silent) toast('最新の在庫を読み込みました');
     })
-    .withFailureHandler(e => { $('#reload').disabled = false; toast(`読み込めませんでした：${e.message}`, true); })
-    .getMaster();
+    .catch(e => toast(`読み込めませんでした：${e.message}`, true))
+    .finally(() => { $('#reload').disabled = false; });
 }
 
 let tt;
@@ -270,24 +303,14 @@ function toast(msg, err){
   tt = setTimeout(() => el.classList.remove('on'), err ? 4000 : 2000);
 }
 
-/* 初期化：埋め込みデータがあれば即表示、無ければサーバーから取得 */
-function start(boot){
-  prep(boot.items);
-  $('#staff').innerHTML = boot.staff.map(s => `<option>${esc(s)}</option>`).join('');
-  try { const s = localStorage.getItem('zaiko_staff'); if (s && boot.staff.includes(s)) $('#staff').value = s; } catch(e) {}
-  render();
-}
-let BOOT = null;
-try { BOOT = JSON.parse($('#boot').textContent); } catch(e) {}
-if (BOOT && BOOT.items) {
-  start(BOOT);
-} else {
-  $('#count').textContent = '読み込み中…';
-  google.script.run
-    .withSuccessHandler(start)
-    .withFailureHandler(e => toast(`読み込めませんでした：${e.message}`, true))
-    .getBoot();
-}
+/* 初期化：前回のデータで即表示 → 裏で最新に更新 */
+(function init(){
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e) {}
+  if (cached && cached.items) start(cached);
+  else $('#count').textContent = '読み込み中…';
+  reload(true);
+})();
 
 $('#q').addEventListener('input', render);
 $('#chips').addEventListener('click', e => {
