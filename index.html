@@ -282,9 +282,9 @@ function start(boot){
   render();
 }
 
-function reload(silent){
+function reload(silent, fresh){
   $('#reload').disabled = true;
-  apiGet({ action: 'boot' })
+  apiGet(fresh ? { action: 'boot', fresh: '1' } : { action: 'boot' })
     .then(d => {
       start(d); saveCache(); lastLoad = Date.now();
       if (!silent) toast('最新の在庫を読み込みました');
@@ -331,7 +331,7 @@ $('#save').addEventListener('click', save);
 $('#cancel').addEventListener('click', closeSheet);
 $('#mask').addEventListener('click', closeSheet);
 $('#hist').addEventListener('toggle', loadHistory);
-$('#reload').addEventListener('click', () => reload(false));
+$('#reload').addEventListener('click', () => reload(false, true));
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && Date.now() - lastLoad > 60000) reload(true);
