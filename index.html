@@ -129,10 +129,10 @@ summary{font-size:14px;color:var(--sub);padding:6px 0}
 
 <div id="toast"></div>
 
+<script type="application/json" id="boot"><?!= boot ?></script>
 <script>
-const BOOT = <?!= boot ?>;
 const $ = s => document.querySelector(s);
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const norm = s => String(s).replace(/[！-～]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
   .toUpperCase().replace(/[\s\-\/]/g, '');
 
@@ -270,11 +270,24 @@ function toast(msg, err){
   tt = setTimeout(() => el.classList.remove('on'), err ? 4000 : 2000);
 }
 
-/* 初期化 */
-prep(BOOT.items);
-$('#staff').innerHTML = BOOT.staff.map(s => `<option>${esc(s)}</option>`).join('');
-try { const s = localStorage.getItem('zaiko_staff'); if (s && BOOT.staff.includes(s)) $('#staff').value = s; } catch(e) {}
-render();
+/* 初期化：埋め込みデータがあれば即表示、無ければサーバーから取得 */
+function start(boot){
+  prep(boot.items);
+  $('#staff').innerHTML = boot.staff.map(s => `<option>${esc(s)}</option>`).join('');
+  try { const s = localStorage.getItem('zaiko_staff'); if (s && boot.staff.includes(s)) $('#staff').value = s; } catch(e) {}
+  render();
+}
+let BOOT = null;
+try { BOOT = JSON.parse($('#boot').textContent); } catch(e) {}
+if (BOOT && BOOT.items) {
+  start(BOOT);
+} else {
+  $('#count').textContent = '読み込み中…';
+  google.script.run
+    .withSuccessHandler(start)
+    .withFailureHandler(e => toast(`読み込めませんでした：${e.message}`, true))
+    .getBoot();
+}
 
 $('#q').addEventListener('input', render);
 $('#chips').addEventListener('click', e => {
