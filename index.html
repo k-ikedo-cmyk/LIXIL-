@@ -41,6 +41,14 @@ h1{font-size:15px;margin:0;font-weight:700;white-space:nowrap}
 .tag{font-size:12px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:6px;vertical-align:2px}
 .tag.欠品{background:#F6DAD4;color:var(--out)}
 .tag.不足{background:#F5E9C8;color:#7A5A00}
+.tag.ord{background:#E3ECF5;color:var(--inv)}
+.tag.po{background:#E2EFE6;color:var(--in)}
+#testBadge{font-size:12px;font-weight:700;background:#E8A33A;color:#16212B;padding:2px 6px;border-radius:4px}
+.subseg{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:-4px 0 12px}
+.subseg[hidden]{display:none}
+.subseg button{padding:9px 0;font-size:15px;font-weight:700;border:2px solid var(--line);background:#fff;border-radius:10px;color:var(--sub)}
+.subseg button.on{border-color:var(--ink);color:var(--ink);background:#EEF2F5}
+#subHint{font-size:13px;color:var(--sub);text-align:center;margin:-6px 0 10px;min-height:1em}
 #list li.grp{background:#DCE2E7;font-weight:700;font-size:17px;padding:13px 14px;border-bottom:1px solid #C5CDD4;position:sticky;top:var(--hdr,98px);z-index:2}
 #list li.grp:active{background:#CFD6DC}
 .caret{display:inline-block;width:1em;transition:transform .12s;color:var(--sub)}
@@ -112,7 +120,7 @@ summary{font-size:14px;color:var(--sub);padding:6px 0}
 <body>
 <header>
   <div class="top">
-    <h1>LIXIL在庫</h1>
+    <h1>LIXIL在庫 <span id="testBadge" hidden>テスト</span></h1>
     <input id="q" type="search" placeholder="品番で検索（例 3186L）" autocomplete="off">
     <button id="reload" title="最新の在庫を読み込む">更新</button>
   </div>
@@ -140,6 +148,8 @@ summary{font-size:14px;color:var(--sub);padding:6px 0}
     <button data-t="調整">調整</button>
     <button data-t="棚卸">棚卸</button>
   </div>
+  <div class="subseg" id="subseg" hidden></div>
+  <div id="subHint"></div>
   <div class="step">
     <button id="minus" aria-label="1減らす">−</button>
     <input id="num" type="number" inputmode="numeric" value="1">
@@ -165,17 +175,22 @@ summary{font-size:14px;color:var(--sub);padding:6px 0}
 
 <script>
 /* ===== 設定：デプロイ後にここを書き換える ===== */
-const API_URL = 'https://script.google.com/macros/s/AKfycbxGTvehfVox-Jbh9Fr3hgt8xjyfWxwz3iKwddnN_Wv1BGHUgrt01kMxn-XbhcQqn2kv/exec';
+const API_URL_MAIN = 'https://script.google.com/macros/s/AKfycbxGTvehfVox-Jbh9Fr3hgt8xjyfWxwz3iKwddnN_Wv1BGHUgrt01kMxn-XbhcQqn2kv/exec';
+const API_URL_TEST = '';   /* 改修版（テスト）用にデプロイしたURLを入れる。アドレスの末尾に ?test を付けて開くとこちらを使う */
 const API_KEY = 'yasumoku-zaiko';   /* Code.gs の API_KEY と同じ文字列 */
 /* ============================================ */
+const TEST = new URLSearchParams(location.search).has('test');
+const API_URL = TEST ? API_URL_TEST : API_URL_MAIN;
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const norm = s => String(s).replace(/[！-～]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
   .toUpperCase().replace(/[\s\-\/]/g, '');
-const CACHE_KEY = 'zaiko_cache_v1';
+const CACHE_KEY = TEST ? 'zaiko_cache_test_v2' : 'zaiko_cache_v1';
+/* 入出庫の区分（Code.gs の SUBS と同じ） */
+const SUBS = { '入庫': ['通常', '外注入荷'], '出庫': ['受注出荷', 'その他'] };
 
-let items = [], byId = {}, filter = 'all', cur = null, type = '入庫', lastLoad = 0, staffList = [];
+let items = [], byId = {}, filter = 'all', cur = null, type = '入庫', sub = '', lastLoad = 0, staffList = [];
 
 /* 通信 */
 async function apiGet(params){
@@ -219,7 +234,8 @@ function rowHtml(it){
   const j = judge(it);
   const cls = it.stock < 0 ? 'neg' : it.stock === 0 ? 'zero' : '';
   return `<li data-id="${esc(it.id)}">
-    <div><div class="hb">${esc(it.hb)}${j && j !== '欠品' ? `<span class="tag ${j}">${j}</span>` : ''}</div>
+    <div><div class="hb">${esc(it.hb)}${j && j !== '欠品' ? `<span class="tag ${j}">${j}</span>` : ''}${
+      it.ord > 0 ? `<span class="tag ord">受注 ${it.ord}</span>` : ''}${it.po > 0 ? `<span class="tag po">発注 ${it.po}</span>` : ''}</div>
     <div class="meta">${esc(it.cat)}　${esc(it.w)}×${esc(it.h)}${it.target != null ? '　適正 ' + it.target : ''}</div></div>
     <div class="qty ${cls}">${it.stock}</div></li>`;
 }
@@ -256,7 +272,8 @@ function toggleGroup(g){
 function openSheet(it){
   cur = it;
   $('#sHb').textContent = it.hb;
-  $('#sMeta').textContent = `${it.cat}　${it.w}×${it.h}`;
+  $('#sMeta').textContent = `${it.cat}　${it.w}×${it.h}` +
+    (it.ord != null ? `　受注残 ${it.ord}　発注残 ${it.po}` : '');
   $('#sQty').textContent = it.stock;
   $('#num').value = 1;
   $('#note').value = '';
@@ -279,7 +296,31 @@ function setType(t){
   $('#sheet').dataset.t = t;
   if (t === '棚卸') $('#num').value = cur.stock < 0 ? 0 : cur.stock;
   else if (t !== '調整' && !(parseInt($('#num').value, 10) >= 1)) $('#num').value = 1;
+  const opts = SUBS[t];
+  $('#subseg').hidden = !opts;
+  if (opts) {
+    $('#subseg').innerHTML = opts.map(o => `<button data-s="${o}">${o}</button>`).join('');
+    sub = t === '出庫' ? ((cur.ord > 0) ? '受注出荷' : 'その他') : '通常';
+  } else sub = '';
+  setSub(sub);
+}
+function setSub(s){
+  sub = s;
+  document.querySelectorAll('#subseg button').forEach(b => b.classList.toggle('on', b.dataset.s === s));
   update();
+}
+function subHint(n){
+  if (sub === '外注入荷') {
+    if (!(cur.po > 0)) return '未入荷の発注はありません';
+    return n > cur.po ? `発注残 ${cur.po}。超えた ${n - cur.po} は消し込みません` : `発注残 ${cur.po} から古い順に消し込みます`;
+  }
+  if (sub === '受注出荷') {
+    if (!(cur.ord > 0)) return '在庫から出す未出荷の受注はありません';
+    return n > cur.ord ? `受注残 ${cur.ord}。超えた ${n - cur.ord} は消し込みません` : `受注残 ${cur.ord} から納期の早い順に消し込みます`;
+  }
+  if (type === '入庫' && cur.po > 0) return `発注残 ${cur.po} あり（外注からの納品なら「外注入荷」）`;
+  if (type === '出庫' && cur.ord > 0) return `受注残 ${cur.ord} あり（受注分の出荷なら「受注出荷」）`;
+  return '';
 }
 function delta(){
   const n = parseInt($('#num').value, 10) || 0;
@@ -296,7 +337,8 @@ function update(){
     p.textContent = `登録後の在庫　${cur.stock} → ${after}`;
   }
   p.classList.toggle('neg', after < 0);
-  $('#save').textContent = `${type}を登録`;
+  $('#subHint').textContent = sub ? subHint(parseInt($('#num').value, 10) || 0) : '';
+  $('#save').textContent = sub && sub !== '通常' && sub !== 'その他' ? `${sub}を登録` : `${type}を登録`;
 }
 function step(d){
   const min = type === '調整' ? -9999 : type === '棚卸' ? 0 : 1;
@@ -312,18 +354,36 @@ function save(){
   if (type === '調整' && qty === 0) return toast('調整数量を入力してください', true);
   const it = cur, d = delta(), after = it.stock + d;
   if (after < 0 && !confirm(`在庫が ${after} になります。登録しますか？`)) return;
+  if (sub === '外注入荷' && !(it.po > 0) && !confirm('未入荷の発注がありません。外注入荷として登録しますか？')) return;
+  if (sub === '受注出荷' && !(it.ord > 0) && !confirm('在庫から出す未出荷の受注がありません。受注出荷として登録しますか？')) return;
 
-  const staff = $('#staff').value, note = $('#note').value.trim(), t = type;
+  const staff = $('#staff').value, note = $('#note').value.trim(), t = type, s = sub;
+  const label = s && s !== '通常' && s !== 'その他' ? s : t;
+  const dOrd = s === '受注出荷' ? Math.min(qty, it.ord || 0) : 0;
+  const dPo = s === '外注入荷' ? Math.min(qty, it.po || 0) : 0;
   try { localStorage.setItem('zaiko_staff', staff); } catch(e) {}
 
   /* 先に画面へ反映（待ち時間ゼロ）→ 裏でシートへ保存 */
   it.stock = after;
+  if (dOrd) it.ord -= dOrd;
+  if (dPo) it.po -= dPo;
   closeSheet(); render(); saveCache();
-  toast(`${t}を登録中…`);
+  toast(`${label}を登録中…`);
 
-  apiPost({ id: it.id, type: t, qty, staff, note })
-    .then(r => { it.stock = r.stock; render(); saveCache(); toast(`${t}を登録しました　${it.hb}：${r.stock}`); })
-    .catch(e => { it.stock -= d; render(); saveCache(); toast(`登録できませんでした：${e.message}`, true); });
+  apiPost({ id: it.id, type: t, sub: s, qty, staff, note })
+    .then(r => {
+      it.stock = r.stock;
+      if (r.matched != null) {   /* サーバーが実際に消し込んだ数で直す */
+        if (s === '受注出荷') it.ord = Math.max(0, (it.ord || 0) + dOrd - r.matched);
+        if (s === '外注入荷') it.po = Math.max(0, (it.po || 0) + dPo - r.matched);
+      }
+      render(); saveCache();
+      toast(`${label}を登録しました　${it.hb}：${r.stock}${r.matched ? `（消し込み ${r.matched}）` : ''}`);
+    })
+    .catch(e => {
+      it.stock -= d; if (dOrd) it.ord += dOrd; if (dPo) it.po += dPo;
+      render(); saveCache(); toast(`登録できませんでした：${e.message}`, true);
+    });
 }
 
 function loadHistory(){
@@ -460,6 +520,8 @@ function toast(msg, err){
 
 /* 初期化：前回のデータで即表示 → 裏で最新に更新 */
 (function init(){
+  if (TEST) { $('#testBadge').hidden = false; document.title = 'LIXIL在庫（テスト）'; }
+  if (!API_URL) { $('#count').textContent = ''; toast('テスト用のURL（API_URL_TEST）が未設定です', true); return; }
   let cached = null;
   try { cached = JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e) {}
   if (cached && cached.items) start(cached);
@@ -481,6 +543,7 @@ $('#list').addEventListener('click', e => {
 const fitHeader = () => document.documentElement.style.setProperty('--hdr', document.querySelector('header').offsetHeight + 'px');
 fitHeader(); window.addEventListener('resize', fitHeader);
 $('#seg').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setType(b.dataset.t); });
+$('#subseg').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setSub(b.dataset.s); });
 $('#minus').addEventListener('click', () => step(-1));
 $('#plus').addEventListener('click', () => step(1));
 $('#num').addEventListener('input', update);
