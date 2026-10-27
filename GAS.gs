@@ -10,14 +10,14 @@
  *
  * 受発注との連動
  *  - 入庫「外注入荷」…外注指示の未入荷分を入荷予定日の早い順に消し込む（入荷済数 J列・状態 G列・入荷日 F列）
- *  - 出庫「受注出荷」…受注明細の在庫引当・未出荷分を納期の早い順に消し込む（出荷済数 K列・状態 G列）
+ *  - 出庫「受注出荷」…受注明細の在庫引当・未出荷（新規を含む）分を納期の早い順に消し込む（出荷済数 J列・状態 G列）
  *  - 入出庫履歴の H列に区分、I列に消し込んだ行（例 R12:3,R15:2）を残す
  *  - 変更依頼の承認で数量が変わったときは、消し込みも差分だけ直す
  */
 
 /* ===== 書き込み先：テストは改修版、本番は元のスプシのIDにする ===== */
-const SS_ID = '1S5kzOKJc5SILpnvY_y3qjTT50fDK8j7dnKUMTuTBiSs';  // 改修版（テスト）
-// const SS_ID = '19a-c_afxv_Ab0xfYPzxxmj0vxfP336KA0wiRZCJnZ5I'; // 本番
+// const SS_ID = '1S5kzOKJc5SILpnvY_y3qjTT50fDK8j7dnKUMTuTBiSs';  // 改修版（テスト）
+const SS_ID = '19a-c_afxv_Ab0xfYPzxxmj0vxfP336KA0wiRZCJnZ5I'; // 本番（2026-10-27〜）
 /* ================================================================ */
 
 const SH_MASTER = '製品マスタ';
@@ -208,12 +208,13 @@ function register(p) {
 
 /**
  * 消し込みの対象シートの設定（列番号は1始まり）
- *  ord: 受注明細  A納期 C製品ID E数量 F引当 G状態 K出荷済数 L出荷記録
+ *  ord: 受注明細  A納期 B製品ID D数量 F引当 G状態 J出荷済数 K出荷記録（2026-10-26 列変更）
+ *       状態は 新規／未出荷／指示済み／出荷済（2026-10-27〜）。在庫引当の 新規・未出荷 を消し込む
  *  po : 外注指示  A指示日 C製品ID D数量 E入荷予定日 F入荷日 G状態 J入荷済数 K入荷記録
  */
 const CONSUME = {
-  ord: { sheet: SH_ORDER, width: 12, id: 3, qty: 5, done: 11, status: 7, rec: 12, sort: [1],
-    open: r => r[5] === '在庫' && r[6] === '未出荷',
+  ord: { sheet: SH_ORDER, width: 11, id: 2, qty: 4, done: 10, status: 7, rec: 11, sort: [1],
+    open: r => r[5] === '在庫' && (r[6] === '未出荷' || r[6] === '新規'),
     after: (done, total) => ({ status: done >= total ? '出荷済' : '未出荷' }) },
   po: { sheet: SH_PO, width: 11, id: 3, qty: 4, done: 10, status: 7, rec: 11, sort: [5, 1], arrived: 6,
     open: r => r[6] !== '入荷済',
