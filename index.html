@@ -3,7 +3,999 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LIXIL在庫</title><!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LIXIL在庫</title>
+<style>
+:root{
+  --bg:#E9EDF0; --panel:#FFFFFF; --ink:#16212B; --sub:#5B6B79; --line:#D3DAE0;
+  --in:#2D7A4C; --out:#B23F2B; --adj:#6F6420; --inv:#1F5A8C; --mute:#A7B2BC;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:"Hiragino Sans","Noto Sans JP","Yu Gothic UI","Meiryo",sans-serif;
+  -webkit-tap-highlight-color:transparent}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:3px solid #4A90D9;outline-offset:2px}
+
+/* ヘッダー */
+header{position:sticky;top:0;z-index:5;background:var(--ink);color:#fff;padding:10px 12px 8px}
+.top{display:flex;gap:8px;align-items:center}
+h1{font-size:15px;margin:0;font-weight:700;white-space:nowrap}
+#q{flex:1;min-width:0;font-size:18px;padding:10px 12px;border:0;border-radius:8px;background:#fff;color:var(--ink)}
+#reload{border:1px solid #ffffff55;background:none;color:#fff;border-radius:8px;padding:9px 10px;font-size:14px}
+#reload:disabled{opacity:.4}
+.bar{display:flex;gap:6px;margin-top:8px;align-items:center;overflow-x:auto}
+.chip{border:1px solid #ffffff55;background:none;color:#fff;padding:5px 12px;border-radius:999px;font-size:14px;white-space:nowrap}
+.chip.on{background:#fff;color:var(--ink);border-color:#fff}
+#count{margin-left:auto;font-size:13px;color:#C9D3DB;white-space:nowrap}
+
+/* 一覧 */
+#list{list-style:none;margin:0;padding:0}
+#list li{display:flex;align-items:center;gap:10px;padding:11px 14px;background:var(--panel);border-bottom:1px solid var(--line);cursor:pointer}
+#list li:active{background:#F2F5F7}
+.hb{font-size:17px;font-weight:700;letter-spacing:.01em;word-break:break-all}
+.meta{font-size:13px;color:var(--sub);margin-top:2px}
+.qty{margin-left:auto;font-size:30px;font-weight:700;font-variant-numeric:tabular-nums;text-align:right;min-width:2.5ch;line-height:1}
+.qty.zero{color:var(--mute)}
+.qty.neg{color:var(--out)}
+.tag{font-size:12px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:6px;vertical-align:2px}
+.tag.欠品{background:#F6DAD4;color:var(--out)}
+.tag.不足{background:#F5E9C8;color:#7A5A00}
+.tag.ord{background:#E3ECF5;color:var(--inv)}
+.tag.po{background:#E2EFE6;color:var(--in)}
+#testBadge{font-size:12px;font-weight:700;background:#E8A33A;color:#16212B;padding:2px 6px;border-radius:4px}
+.subseg{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:-4px 0 12px}
+.subseg[hidden]{display:none}
+.subseg button{padding:9px 0;font-size:15px;font-weight:700;border:2px solid var(--line);background:#fff;border-radius:10px;color:var(--sub)}
+.subseg button.on{border-color:var(--ink);color:var(--ink);background:#EEF2F5}
+#subHint{font-size:13px;color:var(--sub);text-align:center;margin:-6px 0 10px;min-height:1em}
+#list li.grp{background:#DCE2E7;font-weight:700;font-size:17px;padding:13px 14px;border-bottom:1px solid #C5CDD4;position:sticky;top:var(--hdr,98px);z-index:2}
+#list li.grp:active{background:#CFD6DC}
+.caret{display:inline-block;width:1em;transition:transform .12s;color:var(--sub)}
+.grp.open .caret{transform:rotate(90deg)}
+.gmeta{margin-left:auto;font-size:13px;font-weight:400;color:var(--sub)}
+.empty{padding:40px 16px;text-align:center;color:var(--sub);cursor:default!important}
+
+/* 登録シート */
+#mask{position:fixed;inset:0;background:#0007;opacity:0;pointer-events:none;transition:opacity .15s;z-index:10}
+#mask.on{opacity:1;pointer-events:auto}
+#sheet,#adm{position:fixed;left:0;right:0;bottom:0;z-index:11;background:var(--panel);border-radius:14px 14px 0 0;
+  padding:16px 16px calc(16px + env(safe-area-inset-bottom));max-width:640px;margin:0 auto;
+  transform:translateY(105%);transition:transform .18s ease-out;max-height:92vh;overflow-y:auto}
+#sheet.on,#adm.on{transform:none}
+.sh-head{display:flex;gap:12px;align-items:flex-start}
+.now{margin-left:auto;text-align:right}
+.now b{display:block;font-size:44px;line-height:1;font-variant-numeric:tabular-nums}
+.now small{font-size:12px;color:var(--sub)}
+.seg{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:16px 0 12px}
+.seg button{padding:12px 0;font-size:16px;font-weight:700;border:2px solid var(--line);background:#fff;border-radius:10px;color:var(--sub)}
+.seg button.on[data-t="入庫"]{background:var(--in);border-color:var(--in);color:#fff}
+.seg button.on[data-t="出庫"]{background:var(--out);border-color:var(--out);color:#fff}
+.seg button.on[data-t="調整"]{background:var(--adj);border-color:var(--adj);color:#fff}
+.seg button.on[data-t="棚卸"]{background:var(--inv);border-color:var(--inv);color:#fff}
+.step{display:grid;grid-template-columns:72px 1fr 72px;gap:8px}
+.step button{font-size:30px;border:0;border-radius:10px;background:#E4E9ED;height:64px}
+#num{font-size:34px;font-weight:700;text-align:center;border:2px solid var(--line);border-radius:10px;width:100%;font-variant-numeric:tabular-nums}
+#preview{text-align:center;margin:10px 0 12px;font-size:16px;color:var(--sub);font-variant-numeric:tabular-nums}
+#preview.neg{color:var(--out);font-weight:700}
+.row2{display:grid;grid-template-columns:110px 1fr;gap:8px}
+.row2 select,.row2 input{padding:11px 10px;border:2px solid var(--line);border-radius:10px;background:#fff;font-size:16px;min-width:0}
+#save{width:100%;margin-top:12px;padding:16px;border:0;border-radius:10px;font-size:19px;font-weight:700;color:#fff;background:var(--in)}
+#sheet[data-t="出庫"] #save{background:var(--out)}
+#sheet[data-t="調整"] #save{background:var(--adj)}
+#sheet[data-t="棚卸"] #save{background:var(--inv)}
+#cancel{width:100%;margin-top:6px;padding:10px;border:0;background:none;color:var(--sub);font-size:15px}
+details{margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
+summary{font-size:14px;color:var(--sub);padding:6px 0}
+#hlist{list-style:none;margin:0;padding:0;font-size:14px}
+#hlist li{display:grid;grid-template-columns:82px 36px 72px 1fr;gap:6px;padding:6px 0;border-bottom:1px solid #EEF1F3}
+.fix{grid-column:1/-1;justify-self:end;border:1px solid var(--line);background:#fff;border-radius:6px;padding:4px 10px;font-size:13px;color:var(--sub)}
+.pend{grid-column:1/-1;justify-self:end;font-style:normal;font-size:13px;color:#7A5A00;background:#F5E9C8;padding:2px 8px;border-radius:4px}
+#hlist li.fixform{display:flex;flex-wrap:wrap;gap:6px;align-items:center;background:#F4F6F8;padding:8px;border-radius:8px}
+.fixform input{padding:8px;border:2px solid var(--line);border-radius:8px;font-size:16px;min-width:0}
+.fixform .fq{width:80px}.fixform .fr{flex:1 1 140px}
+.fixform button{padding:8px 12px;border:0;border-radius:8px;font-size:15px}
+.fixform .go{background:var(--ink);color:#fff}
+.adm-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.adm-h h2{font-size:18px;margin:0}
+#alist{list-style:none;margin:0;padding:0}
+#alist li{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px}
+#alist .chg{font-size:18px;font-weight:700;margin:4px 0;font-variant-numeric:tabular-nums}
+#alist .btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+#alist .btns button{padding:11px;border:0;border-radius:8px;font-size:16px;font-weight:700}
+#alist .ok{background:var(--in);color:#fff}#alist .ng{background:#E4E9ED}
+#hlist .q{text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+
+/* ヘッダーのボタン（報告・管理・棚卸） */
+.hbtn{border:1px solid #ffffff55;background:none;color:#fff;padding:5px 12px;border-radius:999px;font-size:14px;white-space:nowrap}
+.hbtn.tkb{border-color:#9CC3E6}
+#admN{display:inline-block;min-width:1.4em;margin-left:4px;padding:0 5px;border-radius:999px;background:#E8A33A;color:#16212B;font-weight:700;font-size:12px}
+#admN:empty{display:none}
+body.tkmode .n-only{display:none}
+body:not(.tkmode) .tk-only{display:none}
+
+/* 棚卸モードの帯 */
+#tkBanner{display:flex;align-items:center;gap:8px;margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--inv);font-size:14px;flex-wrap:wrap}
+#tkBanner[hidden]{display:none}
+#tkBanner.wait{background:#7A5A00}
+#tkBanner b{font-size:15px}
+#tkProg{flex:1 1 120px;height:8px;background:#ffffff40;border-radius:999px;overflow:hidden;min-width:80px}
+#tkProg i{display:block;height:100%;background:#fff;width:0}
+#tkFinish{border:0;background:#fff;color:var(--inv);font-weight:700;border-radius:8px;padding:6px 14px;font-size:14px}
+.tkbtn2{border:1px solid #ffffffaa;background:none;color:#fff;font-weight:700;border-radius:8px;padding:5px 12px;font-size:14px}
+#tkBanner button[hidden]{display:none}
+#tkBanner.off{background:#3E5568}
+.tag.todo{background:#E4E9ED;color:var(--sub)}
+.tag.todoS{background:#F6DAD4;color:var(--out)}
+.tag.done{background:#DCE8F3;color:var(--inv)}
+body.tkmode .qty{color:var(--inv)}
+body.tkmode .qty.zero{color:var(--mute)}
+
+/* 棚卸入力シート・報告・管理 */
+#tks,#rpt{position:fixed;left:0;right:0;bottom:0;z-index:11;background:var(--panel);border-radius:14px 14px 0 0;
+  padding:16px 16px calc(16px + env(safe-area-inset-bottom));max-width:640px;margin:0 auto;
+  transform:translateY(105%);transition:transform .18s ease-out;max-height:92vh;overflow-y:auto}
+#tks.on,#rpt.on{transform:none}
+#tLoc{display:grid;gap:6px;margin:16px 0 12px}
+#tLoc button{padding:12px 0;font-size:17px;font-weight:700;border:2px solid var(--line);background:#fff;border-radius:10px;color:var(--sub)}
+#tLoc button.on{background:var(--inv);border-color:var(--inv);color:#fff}
+#tNum{font-size:34px;font-weight:700;text-align:center;border:2px solid var(--line);border-radius:10px;width:100%;font-variant-numeric:tabular-nums}
+#tSave{width:100%;margin-top:12px;padding:16px;border:0;border-radius:10px;font-size:19px;font-weight:700;color:#fff;background:var(--inv)}
+#tSave:disabled,#rSend:disabled{opacity:.5}
+#tStaffRow{margin-top:10px}
+#tList{list-style:none;margin:10px 0 0;padding:0;font-size:15px}
+#tList li{display:grid;grid-template-columns:82px 1fr 56px 64px;gap:6px;align-items:center;padding:7px 0;border-bottom:1px solid #EEF1F3}
+#tList .q{text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
+#tList button{border:1px solid var(--line);background:#fff;border-radius:6px;padding:4px 8px;font-size:13px;color:var(--sub)}
+.linkbtn{display:block;width:100%;margin-top:10px;padding:10px;border:1px dashed var(--line);border-radius:10px;background:none;color:var(--out);font-size:14px}
+#rText{width:100%;min-height:120px;padding:10px;border:2px solid var(--line);border-radius:10px;font:inherit;font-size:16px;resize:vertical}
+#rSend{width:100%;margin-top:10px;padding:14px;border:0;border-radius:10px;font-size:18px;font-weight:700;color:#fff;background:var(--ink)}
+#rItem{font-size:14px;color:var(--sub);margin:6px 0}
+.tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px}
+.tabs button{padding:9px 0;font-size:15px;font-weight:700;border:2px solid var(--line);background:#fff;border-radius:10px;color:var(--sub)}
+.tabs button.on{border-color:var(--ink);color:var(--ink);background:#EEF2F5}
+.tabs em{font-style:normal;margin-left:4px;font-size:12px;background:#E8A33A;color:#16212B;border-radius:999px;padding:0 6px}
+.tabs em:empty{display:none}
+#rlist{list-style:none;margin:0;padding:0}
+#rlist li{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px}
+#rlist li.done{opacity:.55}
+#rlist .txt{white-space:pre-wrap;font-size:16px;margin:4px 0}
+#rlist button{margin-top:6px;padding:8px 14px;border:0;border-radius:8px;background:var(--in);color:#fff;font-weight:700}
+.tkr-sum{font-size:15px;line-height:1.6;margin-bottom:8px}
+.tkr-tbl{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}
+.tkr-tbl th,.tkr-tbl td{padding:6px 4px;border-bottom:1px solid #EEF1F3;text-align:right}
+.tkr-tbl th:first-child,.tkr-tbl td:first-child{text-align:left}
+.tkr-tbl .m{color:var(--out);font-weight:700}.tkr-tbl .p{color:var(--in);font-weight:700}
+.tkr-short{margin-top:10px;padding:10px;border-radius:8px;background:#F6DAD4;color:var(--out);font-size:14px;line-height:1.6}
+.tkr-btns{display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-top:12px}
+.tkr-btns button{padding:13px;border:0;border-radius:8px;font-size:16px;font-weight:700}
+.tkr-btns .ok{background:var(--inv);color:#fff}.tkr-btns .ng{background:#E4E9ED}
+
+/* トースト */
+#toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);background:var(--ink);color:#fff;padding:10px 16px;
+  border-radius:8px;font-size:15px;opacity:0;transition:.2s;z-index:20;max-width:90vw;pointer-events:none}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+#toast.err{background:var(--out)}
+#toast.top{top:16px;bottom:auto;transform:translate(-50%,-20px)}
+#toast.top.on{transform:translate(-50%,0)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <h1>LIXIL在庫 <span id="testBadge" hidden>テスト</span></h1>
+    <input id="q" type="search" placeholder="品番で検索（例 3186L）" autocomplete="off">
+    <button id="reload" title="最新の在庫を読み込む">更新</button>
+  </div>
+  <div class="bar" id="chips">
+    <button class="chip on" data-f="all">すべて</button>
+    <button class="chip n-only" data-f="stock">在庫あり</button>
+    <button class="chip n-only" data-f="zero">在庫0</button>
+    <button class="chip n-only" data-f="short">不足</button>
+    <button class="chip tk-only" data-f="tkTodoStock">在庫有未棚卸</button>
+    <button class="chip tk-only" data-f="tkTodo">未棚卸</button>
+    <button class="chip tk-only" data-f="tkDone">棚卸済</button>
+    <button id="rptBtn" class="hbtn">報告</button>
+    <button id="admBtn" class="hbtn">管理<span id="admN"></span></button>
+    <button id="tkBtn" class="hbtn tkb n-only">棚卸開始</button>
+    <span id="count"></span>
+  </div>
+  <div id="tkBanner" hidden>
+    <b id="tkTitle"></b><span id="tkText"></span>
+    <span id="tkProg"><i></i></span>
+    <button id="tkLeave" class="tkbtn2">この端末は終了</button>
+    <button id="tkBack" class="tkbtn2">棚卸に戻る</button>
+    <button id="tkFinish">全体を完了</button>
+  </div>
+</header>
+
+<ul id="list"></ul>
+
+<div id="mask"></div>
+<section id="sheet" data-t="入庫" aria-hidden="true">
+  <div class="sh-head">
+    <div><div id="sHb" class="hb"></div><div id="sMeta" class="meta"></div></div>
+    <div class="now"><b id="sQty"></b><small>現在の在庫</small></div>
+  </div>
+  <div class="seg" id="seg">
+    <button data-t="入庫" class="on">入庫</button>
+    <button data-t="出庫">出庫</button>
+    <button data-t="調整">調整</button>
+    <button data-t="棚卸">棚卸</button>
+  </div>
+  <div class="subseg" id="subseg" hidden></div>
+  <div id="subHint"></div>
+  <div class="step">
+    <button id="minus" aria-label="1減らす">−</button>
+    <input id="num" type="number" inputmode="numeric" value="1">
+    <button id="plus" aria-label="1増やす">＋</button>
+  </div>
+  <div id="preview"></div>
+  <div class="row2">
+    <select id="staff"></select>
+    <input id="note" placeholder="備考（現場名など）">
+  </div>
+  <button id="save">入庫を登録</button>
+  <button id="cancel">閉じる</button>
+  <button id="sRpt" class="linkbtn" style="color:var(--sub)">この品番についてバックオフィスに報告</button>
+  <details id="hist"><summary>この品番の最近の履歴</summary><ul id="hlist"></ul></details>
+</section>
+
+<section id="tks" aria-hidden="true">
+  <div class="sh-head">
+    <div><div id="tHb" class="hb"></div><div id="tMeta" class="meta"></div></div>
+    <div class="now"><b id="tTotal"></b><small>棚卸した数（合計）</small></div>
+  </div>
+  <div id="tLoc"></div>
+  <div class="step">
+    <button id="tMinus" aria-label="1減らす">−</button>
+    <input id="tNum" type="number" inputmode="numeric" placeholder="数" min="0">
+    <button id="tPlus" aria-label="1増やす">＋</button>
+  </div>
+  <div class="row2" id="tStaffRow"><select id="tStaff"></select><span class="meta" style="align-self:center">同じ品番は置き場ごとに足し算されます</span></div>
+  <button id="tSave">棚卸数を登録</button>
+  <ul id="tList"></ul>
+  <button id="tOut" class="linkbtn">出荷・入荷が必要なとき（バックオフィスに報告）</button>
+  <button id="tClose" style="width:100%;margin-top:6px;padding:10px;border:0;background:none;color:var(--sub);font-size:15px">閉じる</button>
+</section>
+
+<section id="rpt" aria-hidden="true">
+  <div class="adm-h"><h2>バックオフィスに報告</h2><span id="rStaff" class="meta"></span></div>
+  <div id="rItem"></div>
+  <textarea id="rText" placeholder="例）KGAX3186-Lの在庫に傷あり2枚。工場の棚に置いてあります"></textarea>
+  <button id="rSend">報告を送る</button>
+  <button id="rClose" style="width:100%;margin-top:6px;padding:10px;border:0;background:none;color:var(--sub);font-size:15px">閉じる</button>
+</section>
+
+<section id="adm" aria-hidden="true">
+  <div class="adm-h"><h2>バックオフィス</h2><span id="aStaff" class="meta"></span></div>
+  <div class="tabs" id="aTabs">
+    <button data-tab="req" class="on">変更依頼<em id="tabReqN"></em></button>
+    <button data-tab="rpt">報告<em id="tabRptN"></em></button>
+    <button data-tab="tk">棚卸<em id="tabTkN"></em></button>
+  </div>
+  <div data-pane="req"><ul id="alist"></ul></div>
+  <div data-pane="rpt" hidden><ul id="rlist"></ul></div>
+  <div data-pane="tk" hidden><div id="tkr"></div></div>
+  <button id="admClose" style="width:100%;padding:10px;border:0;background:none;color:var(--sub);font-size:15px">閉じる</button>
+</section>
+
+<div id="toast"></div>
+
+<script>
+/* ===== 設定：デプロイ後にここを書き換える ===== */
+const API_URL_MAIN = 'https://script.google.com/macros/s/AKfycbxf481wbIwO8GbB8Xgp-cgQp8Zbm9fmECfJjBcA2fFKGxOusZSOPm1bZvvJH-KX2zOg/exec';
+const API_URL_TEST = '';   /* 改修版（テスト）用にデプロイしたURLを入れる。アドレスの末尾に ?test を付けて開くとこちらを使う */
+const API_KEY = 'yasumoku-zaiko';   /* Code.gs の API_KEY と同じ文字列 */
+/* ============================================ */
+const TEST = new URLSearchParams(location.search).has('test');
+const API_URL = TEST ? API_URL_TEST : API_URL_MAIN;
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const norm = s => String(s).replace(/[！-～]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+  .toUpperCase().replace(/[\s\-\/]/g, '');
+const CACHE_KEY = TEST ? 'zaiko_cache_test_v2' : 'zaiko_cache_v1';
+/* 入出庫の区分（Code.gs の SUBS と同じ） */
+const SUBS = { '入庫': ['通常', '外注入荷'], '出庫': ['受注出荷', 'その他'] };
+
+let items = [], byId = {}, filter = 'all', cur = null, type = '入庫', sub = '', lastLoad = 0, staffList = [];
+let tk = { status: '', locs: ['倉庫', '工場'], counts: {} };   /* 棚卸モードの状態（サーバーから） */
+const tkOff = () => { try { return !!tk.id && localStorage.getItem('zaiko_tk_off') === tk.id; } catch(e) { return false; } };
+const inTk = () => tk.status === '実施中' && !tkOff();
+const cntOf = it => (tk.counts || {})[it.id];
+
+/* 通信 */
+async function apiGet(params, full){
+  const q = new URLSearchParams(Object.assign({}, params, { key: API_KEY }));
+  const r = await fetch(API_URL + '?' + q.toString());
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error);
+  return full ? j : j.data;
+}
+async function apiPost(body){
+  const r = await fetch(API_URL, { method: 'POST', body: JSON.stringify(Object.assign({}, body, { key: API_KEY })) });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error);
+  return j.data;
+}
+function saveCache(){
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify({ items, staff: staffList })); } catch(e) {}
+}
+
+function prep(list){
+  items = list.map(it => (it.key = norm(it.hb + ' ' + it.cat), it));
+  byId = {}; items.forEach(it => byId[it.id] = it);
+}
+function judge(it){
+  if (it.stock <= 0) return '欠品';
+  if (it.target != null && it.stock < it.target) return '不足';
+  return '';
+}
+function pass(it){
+  if (inTk()) {
+    if (filter === 'tkTodoStock') return !cntOf(it) && it.stock > 0;
+    if (filter === 'tkTodo') return !cntOf(it);
+    if (filter === 'tkDone') return !!cntOf(it);
+    return true;
+  }
+  if (filter === 'stock') return it.stock > 0;
+  if (filter === 'zero') return it.stock <= 0;
+  if (filter === 'short') return it.target != null && it.stock < it.target;
+  return true;
+}
+
+const openGroups = new Set();
+try { JSON.parse(localStorage.getItem('zaiko_groups') || '[]').forEach(g => openGroups.add(g)); } catch(e) {}
+const grpOf = it => it.hb.slice(0, 4);
+
+function rowHtml(it){
+  if (inTk()) {
+    const c = cntOf(it);
+    const locs = c ? Object.keys(c.l).map(l => `${l} ${c.l[l]}`).join('　') : '';
+    const tag = c ? '<span class="tag done">棚卸済</span>'
+      : it.stock > 0 ? '<span class="tag todoS">在庫有未棚卸</span>' : '<span class="tag todo">未棚卸</span>';
+    return `<li data-id="${esc(it.id)}">
+      <div><div class="hb">${esc(it.hb)}${tag}</div>
+      <div class="meta">在庫 ${it.stock}　${esc(it.cat)}　${esc(it.w)}×${esc(it.h)}${locs ? '　棚卸 ' + esc(locs) : ''}</div></div>
+      <div class="qty ${c ? '' : 'zero'}">${c ? c.t : '—'}</div></li>`;
+  }
+  const j = judge(it);
+  const cls = it.stock < 0 ? 'neg' : it.stock === 0 ? 'zero' : '';
+  return `<li data-id="${esc(it.id)}">
+    <div><div class="hb">${esc(it.hb)}${j && j !== '欠品' ? `<span class="tag ${j}">${j}</span>` : ''}${
+      it.ord > 0 ? `<span class="tag ord">受注 ${it.ord}</span>` : ''}${it.po > 0 ? `<span class="tag po">発注 ${it.po}</span>` : ''}</div>
+    <div class="meta">${esc(it.cat)}　${esc(it.w)}×${esc(it.h)}${it.target != null ? '　適正 ' + it.target : ''}</div></div>
+    <div class="qty ${cls}">${it.stock}</div></li>`;
+}
+
+function render(){
+  const q = norm($('#q').value);
+  const rows = items.filter(it => (!q || it.key.includes(q)) && pass(it));
+  $('#count').textContent = rows.length + '件';
+  if (!rows.length) {
+    $('#list').innerHTML = '<li class="empty">該当する品番がありません。検索語を短くするか、絞り込みを「すべて」にしてください。</li>';
+    return;
+  }
+  const groups = new Map();
+  rows.forEach(it => { const g = grpOf(it); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(it); });
+  const keys = [...groups.keys()].sort();
+  let html = '';
+  keys.forEach(g => {
+    const list = groups.get(g);
+    const open = q ? true : openGroups.has(g);
+    const total = list.reduce((s, it) => s + Math.max(0, it.stock), 0);
+    const gm = inTk() ? `棚卸済 ${list.filter(cntOf).length}/${list.length}` : `${list.length}品番　在庫計 ${total}`;
+    html += `<li class="grp${open ? ' open' : ''}" data-g="${esc(g)}"><span class="caret">▸</span>${esc(g)}<span class="gmeta">${gm}</span></li>`;
+    if (open) html += list.map(rowHtml).join('');
+  });
+  $('#list').innerHTML = html;
+}
+function toggleGroup(g){
+  if ($('#q').value) return;
+  openGroups.has(g) ? openGroups.delete(g) : openGroups.add(g);
+  try { localStorage.setItem('zaiko_groups', JSON.stringify([...openGroups])); } catch(e) {}
+  render();
+}
+
+/* 登録シート */
+function openSheet(it){
+  if (inTk()) return openTk(it);
+  cur = it;
+  $('#sHb').textContent = it.hb;
+  $('#sMeta').textContent = `${it.cat}　${it.w}×${it.h}` +
+    (it.ord != null ? `　受注残 ${it.ord}　発注残 ${it.po}` : '');
+  $('#sQty').textContent = it.stock;
+  $('#num').value = 1;
+  $('#note').value = '';
+  $('#hist').open = false;
+  $('#hlist').innerHTML = '';
+  $('#hlist').dataset.id = '';
+  setType('入庫');
+  $('#mask').classList.add('on');
+  $('#sheet').classList.add('on');
+  $('#sheet').setAttribute('aria-hidden', 'false');
+}
+function closeSheet(){
+  $('#mask').classList.remove('on');
+  $('#sheet').classList.remove('on');
+  $('#sheet').setAttribute('aria-hidden', 'true');
+}
+function setType(t){
+  if (t === '棚卸' && tk.status) return toast('棚卸の確認待ちのため、1品番ずつの棚卸はできません', true);
+  type = t;
+  document.querySelectorAll('#seg button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
+  $('#sheet').dataset.t = t;
+  if (t === '棚卸') $('#num').value = cur.stock < 0 ? 0 : cur.stock;
+  else if (t !== '調整' && !(parseInt($('#num').value, 10) >= 1)) $('#num').value = 1;
+  const opts = SUBS[t];
+  $('#subseg').hidden = !opts;
+  if (opts) {
+    $('#subseg').innerHTML = opts.map(o => `<button data-s="${o}">${o}</button>`).join('');
+    sub = t === '出庫' ? ((cur.ord > 0) ? '受注出荷' : 'その他') : '通常';
+  } else sub = '';
+  setSub(sub);
+}
+function setSub(s){
+  sub = s;
+  document.querySelectorAll('#subseg button').forEach(b => b.classList.toggle('on', b.dataset.s === s));
+  update();
+}
+function subHint(n){
+  if (sub === '外注入荷') {
+    if (!(cur.po > 0)) return '未入荷の発注はありません';
+    return n > cur.po ? `発注残 ${cur.po}。超えた ${n - cur.po} は消し込みません` : `発注残 ${cur.po} から古い順に消し込みます`;
+  }
+  if (sub === '受注出荷') {
+    if (!(cur.ord > 0)) return '在庫から出す未出荷の受注はありません';
+    return n > cur.ord ? `受注残 ${cur.ord}。超えた ${n - cur.ord} は消し込みません` : `受注残 ${cur.ord} から納期の早い順に消し込みます`;
+  }
+  if (type === '入庫' && cur.po > 0) return `発注残 ${cur.po} あり（外注からの納品なら「外注入荷」）`;
+  if (type === '出庫' && cur.ord > 0) return `受注残 ${cur.ord} あり（受注分の出荷なら「受注出荷」）`;
+  return '';
+}
+function delta(){
+  const n = parseInt($('#num').value, 10) || 0;
+  if (type === '棚卸') return n - cur.stock;
+  return type === '出庫' ? -n : n;
+}
+function update(){
+  const after = cur.stock + delta();
+  const p = $('#preview');
+  if (type === '棚卸') {
+    const d = after - cur.stock;
+    p.textContent = `帳簿 ${cur.stock} → 実数 ${after}（差異 ${d > 0 ? '+' : ''}${d}）`;
+  } else {
+    p.textContent = `登録後の在庫　${cur.stock} → ${after}`;
+  }
+  p.classList.toggle('neg', after < 0);
+  $('#subHint').textContent = sub ? subHint(parseInt($('#num').value, 10) || 0) : '';
+  $('#save').textContent = sub && sub !== '通常' && sub !== 'その他' ? `${sub}を登録` : `${type}を登録`;
+}
+function step(d){
+  const min = type === '調整' ? -9999 : type === '棚卸' ? 0 : 1;
+  $('#num').value = Math.max(min, (parseInt($('#num').value, 10) || 0) + d);
+  update();
+}
+
+function save(){
+  if (tk.status === '実施中') return toast('棚卸中のため入出庫できません（全体の完了後に登録してください）', true);
+  const qty = parseInt($('#num').value, 10);
+  if (isNaN(qty)) return toast('数量を入力してください', true);
+  if (type === '棚卸' && qty < 0) return toast('棚卸数量は0以上にしてください', true);
+  if ((type === '入庫' || type === '出庫') && qty < 1) return toast('入庫・出庫の数量は1以上にしてください', true);
+  if (type === '調整' && qty === 0) return toast('調整数量を入力してください', true);
+  const it = cur, d = delta(), after = it.stock + d;
+  if (after < 0 && !confirm(`在庫が ${after} になります。登録しますか？`)) return;
+  if (sub === '外注入荷' && !(it.po > 0) && !confirm('未入荷の発注がありません。外注入荷として登録しますか？')) return;
+  if (sub === '受注出荷' && !(it.ord > 0) && !confirm('在庫から出す未出荷の受注がありません。受注出荷として登録しますか？')) return;
+
+  const staff = $('#staff').value, note = $('#note').value.trim(), t = type, s = sub;
+  const label = s && s !== '通常' && s !== 'その他' ? s : t;
+  const dOrd = s === '受注出荷' ? Math.min(qty, it.ord || 0) : 0;
+  const dPo = s === '外注入荷' ? Math.min(qty, it.po || 0) : 0;
+  try { localStorage.setItem('zaiko_staff', staff); } catch(e) {}
+
+  /* 先に画面へ反映（待ち時間ゼロ）→ 裏でシートへ保存 */
+  it.stock = after;
+  if (dOrd) it.ord -= dOrd;
+  if (dPo) it.po -= dPo;
+  closeSheet(); render(); saveCache();
+  toast(`${label}を登録中…`);
+
+  apiPost({ id: it.id, type: t, sub: s, qty, staff, note })
+    .then(r => {
+      it.stock = r.stock;
+      if (r.matched != null) {   /* サーバーが実際に消し込んだ数で直す */
+        if (s === '受注出荷') it.ord = Math.max(0, (it.ord || 0) + dOrd - r.matched);
+        if (s === '外注入荷') it.po = Math.max(0, (it.po || 0) + dPo - r.matched);
+      }
+      render(); saveCache();
+      toast(`${label}を登録しました　${it.hb}：${r.stock}${r.matched ? `（消し込み ${r.matched}）` : ''}`);
+    })
+    .catch(e => {
+      it.stock -= d; if (dOrd) it.ord += dOrd; if (dPo) it.po += dPo;
+      render(); saveCache(); toast(`登録できませんでした：${e.message}`, true);
+    });
+}
+
+function loadHistory(){
+  if (!$('#hist').open || $('#hlist').dataset.id === cur.id) return;
+  const id = cur.id;
+  $('#hlist').innerHTML = '<li>読み込み中…</li>';
+  apiGet({ action: 'history', id })
+    .then(rows => {
+      $('#hlist').dataset.id = id;
+      $('#hlist').innerHTML = rows.length ? rows.map(r =>
+        `<li><span>${esc(r.d)}</span><span>${esc(r.t)}</span><span class="q">${esc(r.q)}</span><span>${esc(r.s)} ${esc(r.n)}</span>${
+          r.pend ? '<em class="pend">変更依頼中</em>'
+                 : `<button class="fix" data-rec="${esc(r.rec)}" data-q="${esc(r.qr)}" data-t="${esc(r.t)}">修正を依頼</button>`}</li>`
+      ).join('') : '<li>この品番の履歴はまだありません</li>';
+    })
+    .catch(e => $('#hlist').innerHTML = `<li>履歴を読み込めませんでした：${esc(e.message)}</li>`);
+}
+
+function start(boot){
+  staffList = boot.staff || [];
+  const keep = $('#staff').value;
+  let pick = keep;
+  if (!pick) { try { pick = localStorage.getItem('zaiko_staff'); } catch(e) {} }
+  ['#staff', '#tStaff'].forEach(id => {
+    const sel = $(id);
+    sel.innerHTML = staffList.map(s => `<option>${esc(s)}</option>`).join('');
+    if (pick && staffList.includes(pick)) sel.value = pick;
+  });
+  prep(boot.items || []);
+  render();
+}
+
+function reload(silent, fresh){
+  $('#reload').disabled = true;
+  apiGet(fresh ? { action: 'boot', fresh: '1' } : { action: 'boot' }, true)
+    .then(j => {
+      start(j.data); saveCache(); lastLoad = Date.now();
+      if (j.tk) setTk(j.tk);
+      refreshInbox();
+      if (!silent) toast('最新の在庫を読み込みました');
+    })
+    .catch(e => toast(`読み込めませんでした：${e.message}`, true))
+    .finally(() => { $('#reload').disabled = false; });
+}
+
+/* ===== 変更依頼 ===== */
+function openFixForm(btn){
+  document.querySelectorAll('#hlist .fixform').forEach(f => f.remove());
+  const li = btn.closest('li');
+  const t = btn.dataset.t;
+  const f = document.createElement('li');
+  f.className = 'fixform';
+  f.innerHTML = `<span class="meta">${esc(t)}の正しい数量</span>
+    <input class="fq" type="number" inputmode="numeric" value="${esc(btn.dataset.q)}">
+    <input class="fr" placeholder="理由（例 数え間違い）">
+    <button class="go">依頼する</button><button class="no">やめる</button>`;
+  li.after(f);
+  f.querySelector('.fq').select();
+  f.querySelector('.no').onclick = () => f.remove();
+  f.querySelector('.go').onclick = () => sendFix(btn.dataset.rec, btn.dataset.q, t, f);
+}
+function sendFix(rec, oldQ, t, f){
+  const v = f.querySelector('.fq').value.trim(), reason = f.querySelector('.fr').value.trim();
+  const n = parseInt(v, 10);
+  if (v === '' || isNaN(n)) return toast('正しい数量を入力してください', true);
+  if (t !== '調整' && n < 0) return toast('数量は0以上にしてください', true);
+  if (String(n) === String(oldQ)) return toast('元の数量と同じです', true);
+  if (!reason) return toast('理由を入力してください', true);
+  const go = f.querySelector('.go'); go.disabled = true; go.textContent = '送信中…';
+  apiPost({ action: 'request', recId: rec, newQty: n, reason, staff: $('#staff').value })
+    .then(() => {
+      toast('変更依頼を送りました。承認されると在庫に反映されます');
+      $('#hlist').dataset.id = ''; loadHistory(); refreshInbox();
+    })
+    .catch(e => { go.disabled = false; go.textContent = '依頼する'; toast(`依頼できませんでした：${e.message}`, true); });
+}
+
+/* ===== バックオフィス（変更依頼・報告・棚卸の確認） ===== */
+let adminPin = '', admTab = 'req', inboxN = { requests: 0, reports: 0, tk: '' };
+function refreshInbox(){
+  apiGet({ action: 'inbox' })
+    .then(n => {
+      inboxN = n;
+      const total = n.requests + n.reports + (n.tk === '確認待ち' ? 1 : 0);
+      $('#admN').textContent = total || '';
+      $('#tabReqN').textContent = n.requests || '';
+      $('#tabRptN').textContent = n.reports || '';
+      $('#tabTkN').textContent = n.tk === '確認待ち' ? '!' : '';
+      if (n.tk !== tk.status) pollTk();
+    })
+    .catch(() => {});
+}
+function pinFail(e){
+  if (/PIN/.test(e.message)) { adminPin = ''; try { localStorage.removeItem('zaiko_pin'); } catch(x) {} closeAdmin(); }
+}
+function openAdmin(tab){
+  try { adminPin = localStorage.getItem('zaiko_pin') || ''; } catch(e) {}
+  if (!adminPin) {
+    adminPin = (prompt('管理者PINを入力してください') || '').trim();
+    if (!adminPin) return;
+  }
+  $('#aStaff').textContent = '処理者：' + $('#staff').value;
+  $('#mask').classList.add('on');
+  $('#adm').classList.add('on');
+  $('#adm').setAttribute('aria-hidden', 'false');
+  setAdmTab(tab || (inboxN.tk === '確認待ち' ? 'tk' : inboxN.reports && !inboxN.requests ? 'rpt' : 'req'));
+  refreshInbox();
+}
+function closeAdmin(){
+  $('#adm').classList.remove('on');
+  $('#adm').setAttribute('aria-hidden', 'true');
+  if (!document.querySelector('#sheet.on,#tks.on,#rpt.on')) $('#mask').classList.remove('on');
+}
+function setAdmTab(t){
+  admTab = t;
+  document.querySelectorAll('#aTabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  document.querySelectorAll('#adm [data-pane]').forEach(p => p.hidden = p.dataset.pane !== t);
+  if (t === 'req') loadReqs();
+  if (t === 'rpt') loadReports();
+  if (t === 'tk') loadTkReview();
+}
+function loadReqs(){
+  $('#alist').innerHTML = '<li>読み込み中…</li>';
+  apiGet({ action: 'requests' }).then(renderReqs)
+    .catch(e => $('#alist').innerHTML = `<li>読み込めませんでした：${esc(e.message)}</li>`);
+}
+function renderReqs(list){
+  $('#alist').innerHTML = list.length ? list.map(r => `<li data-req="${esc(r.reqId)}">
+    <div class="hb">${esc(r.hb)}</div>
+    <div class="chg">${esc(r.t)}　${esc(r.from)} → ${esc(r.to)}</div>
+    <div class="meta">理由：${esc(r.reason)}</div>
+    <div class="meta">${esc(r.by)}　${esc(r.d)}　${esc(r.recId)}</div>
+    <div class="btns"><button class="ok">承認して反映</button><button class="ng">却下</button></div></li>`).join('')
+    : '<li class="meta">未処理の変更依頼はありません</li>';
+}
+function decide(li, decision){
+  li.querySelectorAll('button').forEach(b => b.disabled = true);
+  apiPost({ action: 'approve', reqId: li.dataset.req, decision, pin: adminPin, staff: $('#staff').value })
+    .then(r => {
+      try { localStorage.setItem('zaiko_pin', adminPin); } catch(e) {}
+      if (r.id && byId[r.id]) { byId[r.id].stock = r.stock; render(); saveCache(); }
+      li.remove();
+      if (!document.querySelectorAll('#alist li[data-req]').length) renderReqs([]);
+      refreshInbox();
+      toast(decision === '承認' ? `承認しました${r.id ? '　在庫：' + r.stock : ''}` : '却下しました');
+    })
+    .catch(e => {
+      li.querySelectorAll('button').forEach(b => b.disabled = false);
+      pinFail(e);
+      toast(`処理できませんでした：${e.message}`, true);
+    });
+}
+
+/* 報告の一覧 */
+function loadReports(){
+  $('#rlist').innerHTML = '<li>読み込み中…</li>';
+  apiPost({ action: 'reports', pin: adminPin })
+    .then(list => {
+      try { localStorage.setItem('zaiko_pin', adminPin); } catch(e) {}
+      $('#rlist').innerHTML = list.length ? list.map(r => `<li data-rpt="${esc(r.rptId)}" class="${r.st === '未確認' ? '' : 'done'}">
+        <div class="meta">${esc(r.d)}　${esc(r.by)}${r.hb ? '　' + esc(r.hb) : ''}　${esc(r.rptId)}</div>
+        <div class="txt">${esc(r.text)}</div>
+        ${r.st === '未確認' ? '<button>確認した</button>' : '<div class="meta">確認済</div>'}</li>`).join('')
+        : '<li class="meta">報告はありません</li>';
+    })
+    .catch(e => { pinFail(e); $('#rlist').innerHTML = `<li>読み込めませんでした：${esc(e.message)}</li>`; });
+}
+function reportDone(li){
+  const b = li.querySelector('button'); b.disabled = true;
+  apiPost({ action: 'reportDone', rptId: li.dataset.rpt, pin: adminPin, staff: $('#staff').value })
+    .then(() => { li.classList.add('done'); b.outerHTML = '<div class="meta">確認済</div>'; refreshInbox(); })
+    .catch(e => { b.disabled = false; pinFail(e); toast(`処理できませんでした：${e.message}`, true); });
+}
+
+/* 棚卸の確認・確定 */
+function loadTkReview(){
+  const box = $('#tkr');
+  box.innerHTML = '<div class="meta">読み込み中…</div>';
+  apiPost({ action: 'tkReview', pin: adminPin })
+    .then(r => {
+      try { localStorage.setItem('zaiko_pin', adminPin); } catch(e) {}
+      if (!r.status) { box.innerHTML = '<div class="meta">棚卸は行われていません（「棚卸開始」で始まります）</div>'; return; }
+      const sg = n => (n > 0 ? '+' : '') + n;
+      let h = `<div class="tkr-sum"><b>${esc(r.id)}</b>　${esc(r.status)}<br>
+        開始 ${esc(r.start)}（${esc(r.startBy)}）${r.end ? `　完了 ${esc(r.end)}（${esc(r.endBy)}）` : ''}<br>
+        棚卸した品番 ${r.n}（数えていない品番は帳簿のまま）　差異のある品番 ${r.diffN}　増 ${sg(r.plus)}　減 ${r.minus}</div>`;
+      if (r.diffs.length) {
+        h += `<table class="tkr-tbl"><thead><tr><th>品番</th><th>帳簿</th><th>実数</th><th>差異</th><th>以降の入出庫</th><th>確定後</th></tr></thead><tbody>` +
+          r.diffs.map(x => `<tr><td>${esc(x.hb)}<div class="meta">${esc(Object.keys(x.l).map(l => l + ' ' + x.l[l]).join('　'))}</div></td>
+            <td>${x.book}</td><td>${x.cnt}</td><td class="${x.diff < 0 ? 'm' : x.diff > 0 ? 'p' : ''}">${x.diff ? sg(x.diff) : '0'}</td>
+            <td>${x.post ? sg(x.post) : ''}</td><td><b>${x.after}</b></td></tr>`).join('') + '</tbody></table>';
+      } else h += '<div class="meta">帳簿と実数の差異はありません</div>';
+      if (r.todo && r.todo.length) {
+        h += `<div class="tkr-short" style="background:#F5E9C8;color:#7A5A00"><b>在庫ありで未棚卸（確定しても帳簿のまま）${r.todo.length}品番</b><br>` +
+          r.todo.map(t => `${esc(t.hb)}　在庫 ${t.stock}`).join('<br>') + '</div>';
+      }
+      if (r.short && r.short.length) {
+        h += `<div class="tkr-short"><b>確定すると在庫が足りなくなる受注（在庫引当・未出荷）</b><br>` +
+          r.short.map(s => `納期 ${esc(s.d)}　${esc(s.hb)}　${s.qty}枚のうち <b>${s.lack} 不足</b>（受注明細 ${s.row}行目）`).join('<br>') + '</div>';
+      }
+      if (r.status === '確認待ち') {
+        h += `<div class="tkr-btns"><button class="ok" id="tkConfirm">確認して在庫に反映（確定）</button><button class="ng" id="tkReturn">差し戻し</button></div>`;
+      } else {
+        h += '<div class="meta" style="margin-top:10px">現場で「完了」が押されると、ここで確定できるようになります</div>';
+      }
+      box.innerHTML = h;
+      const c = $('#tkConfirm'), b = $('#tkReturn');
+      if (c) c.onclick = () => tkConfirm(c);
+      if (b) b.onclick = () => tkReturn(b);
+    })
+    .catch(e => { pinFail(e); box.innerHTML = `<div class="meta">読み込めませんでした：${esc(e.message)}</div>`; });
+}
+function tkConfirm(btn){
+  if (!confirm('棚卸の数を製品マスタの在庫に反映します。よろしいですか？')) return;
+  btn.disabled = true; btn.textContent = '反映中…';
+  apiPost({ action: 'tkConfirm', pin: adminPin, staff: $('#staff').value })
+    .then(r => {
+      toast(`棚卸を確定しました（${r.n}品番・差異 ${r.diffN}）${r.short.length ? `　在庫不足の受注 ${r.short.length}件` : ''}`);
+      setTk({ status: '' }); reload(true, true); loadTkReview();
+    })
+    .catch(e => { btn.disabled = false; btn.textContent = '確認して在庫に反映（確定）'; pinFail(e); toast(`確定できませんでした：${e.message}`, true); });
+}
+function tkReturn(btn){
+  const reason = prompt('差し戻しの理由（現場に通知されます）');
+  if (reason === null) return;
+  btn.disabled = true;
+  apiPost({ action: 'tkReturn', pin: adminPin, staff: $('#staff').value, reason })
+    .then(v => { setTk(v); toast('差し戻しました。もう一度棚卸中になります'); loadTkReview(); refreshInbox(); })
+    .catch(e => { btn.disabled = false; pinFail(e); toast(`差し戻せませんでした：${e.message}`, true); });
+}
+
+/* ===== 棚卸モード（現場） ===== */
+let lastMode = false;
+function setTk(v){
+  tk = Object.assign({ status: '', locs: ['倉庫', '工場'], counts: {} }, v || {});
+  const mode = inTk();
+  document.body.classList.toggle('tkmode', mode);
+  if (mode !== lastMode) {   /* 絞り込みをモードに合わせて戻す */
+    lastMode = mode;
+    filter = mode ? 'tkTodoStock' : 'all';
+    document.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c.dataset.f === filter));
+    if (!mode && $('#tks').classList.contains('on')) closeTk();
+  }
+  renderTkBanner();
+  render();
+}
+function renderTkBanner(){
+  const b = $('#tkBanner');
+  b.hidden = !tk.status;
+  $('#tkBtn').hidden = !!tk.status;
+  requestAnimationFrame(fitHeader);
+  if (!tk.status) return;
+  const run = tk.status === '実施中', off = run && tkOff();
+  b.classList.toggle('wait', tk.status === '確認待ち');
+  b.classList.toggle('off', off);
+  const all = items.length, done = items.filter(cntOf).length;
+  const todoS = items.filter(it => !cntOf(it) && it.stock > 0).length;
+  $('#tkTitle').textContent = !run ? '棚卸 確認待ち' : off ? '棚卸中（この端末は終了）' : '棚卸中';
+  $('#tkText').textContent = !run
+    ? `完了 ${tk.end || ''}（${tk.endBy || ''}）。入出庫できます。バックオフィスの確定待ち`
+    : `済 ${done}/${all}　在庫有未棚卸 ${todoS}　入出庫は全体の完了まで止まっています`;
+  $('#tkProg i').style.width = all ? Math.round(done / all * 100) + '%' : '0';
+  $('#tkProg').hidden = !run;
+  $('#tkLeave').hidden = !run || off;
+  $('#tkBack').hidden = !off;
+  $('#tkFinish').hidden = !run;
+}
+function pollTk(){
+  return apiGet({ action: 'tk' }).then(setTk).catch(() => {});
+}
+function tkStartAsk(){
+  if (!confirm('棚卸を開始します。全員の画面が棚卸モードになり、完了するまで入庫・出庫はできません。開始しますか？')) return;
+  $('#tkBtn').disabled = true;
+  apiPost({ action: 'tkStart', staff: $('#staff').value })
+    .then(v => { setTk(v); toast('棚卸を開始しました'); })
+    .catch(e => toast(`開始できませんでした：${e.message}`, true))
+    .finally(() => { $('#tkBtn').disabled = false; });
+}
+function tkLeave(){
+  if (!confirm('この端末の棚卸を終了します。ほかの人の棚卸は続きます（入出庫は全体の完了まで止まったままです）。「棚卸に戻る」でいつでも続きができます。')) return;
+  try { localStorage.setItem('zaiko_tk_off', tk.id); } catch(e) {}
+  closeTk(); setTk(tk);
+  toast('この端末の棚卸を終了しました');
+}
+function tkBack(){
+  try { localStorage.removeItem('zaiko_tk_off'); } catch(e) {}
+  setTk(tk);
+  toast('棚卸に戻りました');
+}
+function tkFinishAsk(){
+  const todoS = items.filter(it => !cntOf(it) && it.stock > 0);
+  const msg = '棚卸を全体で完了します（全員の棚卸が終わったときに押してください）。完了すると入出庫を再開できます。' +
+    (todoS.length ? `\n\n在庫ありで未棚卸が ${todoS.length} 品番あります（${todoS.slice(0, 5).map(it => it.hb).join('、')}${todoS.length > 5 ? ' ほか' : ''}）。これらは確定しても帳簿の数のままです。` : '') +
+    '\n\n完了しますか？';
+  if (!confirm(msg)) return;
+  $('#tkFinish').disabled = true;
+  apiPost({ action: 'tkFinish', staff: $('#staff').value })
+    .then(v => { setTk(v); refreshInbox(); toast('棚卸を完了しました。バックオフィスの確定で在庫に反映されます'); })
+    .catch(e => toast(`完了できませんでした：${e.message}`, true))
+    .finally(() => { $('#tkFinish').disabled = false; });
+}
+
+let tCur = null, tLoc = '';
+function openTk(it){
+  tCur = it;
+  $('#tHb').textContent = it.hb;
+  $('#tMeta').textContent = `現在の在庫 ${it.stock}　${it.cat}　${it.w}×${it.h}`;
+  const c = cntOf(it);
+  $('#tTotal').textContent = c ? c.t : '—';
+  try { tLoc = localStorage.getItem('zaiko_loc') || ''; } catch(e) {}
+  if (!tk.locs.includes(tLoc)) tLoc = tk.locs[0];
+  $('#tLoc').style.gridTemplateColumns = `repeat(${tk.locs.length},1fr)`;
+  $('#tLoc').innerHTML = tk.locs.map(l => `<button data-l="${esc(l)}" class="${l === tLoc ? 'on' : ''}">${esc(l)}</button>`).join('');
+  $('#tStaff').value = $('#staff').value;
+  $('#tNum').value = '';
+  $('#tList').innerHTML = '<li><span class="meta">読み込み中…</span></li>';
+  $('#mask').classList.add('on');
+  $('#tks').classList.add('on');
+  $('#tks').setAttribute('aria-hidden', 'false');
+  apiGet({ action: 'tkEntries', id: it.id }).then(list => { if (tCur === it) renderTkList(list); })
+    .catch(e => $('#tList').innerHTML = `<li><span class="meta">読み込めませんでした：${esc(e.message)}</span></li>`);
+}
+function closeTk(){
+  $('#tks').classList.remove('on');
+  $('#tks').setAttribute('aria-hidden', 'true');
+  if (!document.querySelector('#adm.on,#rpt.on')) $('#mask').classList.remove('on');
+}
+function renderTkList(list){
+  $('#tList').innerHTML = list.length ? list.map(x => `<li><span class="meta">${esc(x.d)}</span><span>${esc(x.loc)}　${esc(x.staff)}</span>
+    <span class="q">${x.qty}</span>${x.loc === '（自動0）' ? '<span></span>' : `<button data-rec="${esc(x.rec)}">取消</button>`}</li>`).join('')
+    : '<li><span class="meta" style="grid-column:1/-1">まだ棚卸していません</span></li>';
+}
+function applyTk(r){
+  const l = {};
+  r.list.forEach(x => l[x.loc] = (l[x.loc] || 0) + x.qty);
+  tk.counts = tk.counts || {};
+  if (r.list.length) tk.counts[r.id] = { t: r.total, l }; else delete tk.counts[r.id];
+  if (tCur && tCur.id === r.id) { $('#tTotal').textContent = r.list.length ? r.total : '—'; renderTkList(r.list); }
+  renderTkBanner(); render();
+}
+function tkSave(){
+  const v = $('#tNum').value.trim(), qty = parseInt(v, 10);
+  if (v === '' || isNaN(qty) || qty < 0) return toast('数えた数を入力してください（無ければ 0）', true);
+  const staff = $('#tStaff').value, it = tCur, loc = tLoc;
+  $('#staff').value = staff;
+  try { localStorage.setItem('zaiko_staff', staff); localStorage.setItem('zaiko_loc', loc); } catch(e) {}
+  $('#tSave').disabled = true; $('#tSave').textContent = '登録中…';
+  apiPost({ action: 'tkCount', id: it.id, loc, qty, staff })
+    .then(r => { applyTk(r); $('#tNum').value = ''; toast(`${it.hb}：${loc} ${qty} を登録（合計 ${r.total}）`); })
+    .catch(e => { toast(`登録できませんでした：${e.message}`, true); if (/実施中/.test(e.message)) pollTk(); })
+    .finally(() => { $('#tSave').disabled = false; $('#tSave').textContent = '棚卸数を登録'; });
+}
+function tkCancelRec(btn){
+  if (!confirm('この入力を取り消しますか？')) return;
+  btn.disabled = true;
+  apiPost({ action: 'tkCancel', rec: btn.dataset.rec, staff: $('#tStaff').value })
+    .then(r => { applyTk(r); toast('取り消しました'); })
+    .catch(e => { btn.disabled = false; toast(`取り消せませんでした：${e.message}`, true); });
+}
+
+/* ===== 報告（現場 → バックオフィス・Google Chat） ===== */
+let rCur = null;
+function openReport(it, text){
+  rCur = it || null;
+  $('#rStaff').textContent = '報告者：' + $('#staff').value;
+  $('#rItem').textContent = it ? '品番：' + it.hb : '';
+  $('#rText').value = text || '';
+  $('#mask').classList.add('on');
+  $('#rpt').classList.add('on');
+  $('#rpt').setAttribute('aria-hidden', 'false');
+  setTimeout(() => { const t = $('#rText'); t.focus(); t.setSelectionRange(t.value.length, t.value.length); }, 200);
+}
+function closeReport(){
+  $('#rpt').classList.remove('on');
+  $('#rpt').setAttribute('aria-hidden', 'true');
+  if (!document.querySelector('#adm.on,#tks.on,#sheet.on')) $('#mask').classList.remove('on');
+}
+function sendReport(){
+  const text = $('#rText').value.trim();
+  if (!text) return toast('報告の内容を入力してください', true);
+  $('#rSend').disabled = true; $('#rSend').textContent = '送信中…';
+  apiPost({ action: 'report', text, id: rCur ? rCur.id : '', staff: $('#staff').value })
+    .then(() => { closeReport(); refreshInbox(); toast('報告を送りました'); })
+    .catch(e => toast(`送れませんでした：${e.message}`, true))
+    .finally(() => { $('#rSend').disabled = false; $('#rSend').textContent = '報告を送る'; });
+}
+
+let tt;
+function toast(msg, err){
+  const el = $('#toast');
+  el.textContent = msg;
+  el.classList.toggle('err', !!err);
+  el.classList.toggle('top', !!document.querySelector('#sheet.on,#tks.on,#rpt.on,#adm.on'));
+  el.classList.add('on');
+  clearTimeout(tt);
+  tt = setTimeout(() => el.classList.remove('on'), err ? 4000 : 2000);
+}
+
+/* 初期化：前回のデータで即表示 → 裏で最新に更新 */
+(function init(){
+  if (TEST) { $('#testBadge').hidden = false; document.title = 'LIXIL在庫（テスト）'; }
+  if (!API_URL) { $('#count').textContent = ''; toast('テスト用のURL（API_URL_TEST）が未設定です', true); return; }
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e) {}
+  if (cached && cached.items) start(cached);
+  else $('#count').textContent = '読み込み中…';
+  reload(true);
+})();
+
+$('#q').addEventListener('input', render);
+$('#chips').addEventListener('click', e => {
+  const b = e.target.closest('.chip'); if (!b) return;
+  filter = b.dataset.f;
+  document.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c === b));
+  render();
+});
+$('#list').addEventListener('click', e => {
+  const g = e.target.closest('li.grp'); if (g) return toggleGroup(g.dataset.g);
+  const li = e.target.closest('li[data-id]'); if (li) openSheet(byId[li.dataset.id]);
+});
+const fitHeader = () => document.documentElement.style.setProperty('--hdr', document.querySelector('header').offsetHeight + 'px');
+fitHeader(); window.addEventListener('resize', fitHeader);
+$('#seg').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setType(b.dataset.t); });
+$('#subseg').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setSub(b.dataset.s); });
+$('#minus').addEventListener('click', () => step(-1));
+$('#plus').addEventListener('click', () => step(1));
+$('#num').addEventListener('input', update);
+$('#num').addEventListener('focus', e => e.target.select());
+$('#save').addEventListener('click', save);
+$('#cancel').addEventListener('click', closeSheet);
+$('#mask').addEventListener('click', () => { closeSheet(); closeAdmin(); closeTk(); closeReport(); });
+$('#hlist').addEventListener('click', e => { const b = e.target.closest('.fix'); if (b) openFixForm(b); });
+$('#admBtn').addEventListener('click', () => openAdmin());
+$('#admClose').addEventListener('click', closeAdmin);
+$('#aTabs').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setAdmTab(b.dataset.tab); });
+$('#rlist').addEventListener('click', e => { const li = e.target.closest('li[data-rpt]'); if (li && e.target.closest('button')) reportDone(li); });
+$('#rptBtn').addEventListener('click', () => openReport(null, ''));
+$('#sRpt').addEventListener('click', () => { const it = cur; closeSheet(); openReport(it, ''); });
+$('#rSend').addEventListener('click', sendReport);
+$('#rClose').addEventListener('click', closeReport);
+$('#tkBtn').addEventListener('click', tkStartAsk);
+$('#tkFinish').addEventListener('click', tkFinishAsk);
+$('#tkLeave').addEventListener('click', tkLeave);
+$('#tkBack').addEventListener('click', tkBack);
+$('#tLoc').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  tLoc = b.dataset.l;
+  document.querySelectorAll('#tLoc button').forEach(x => x.classList.toggle('on', x === b));
+});
+$('#tMinus').addEventListener('click', () => { $('#tNum').value = Math.max(0, (parseInt($('#tNum').value, 10) || 0) - 1); });
+$('#tPlus').addEventListener('click', () => { $('#tNum').value = (parseInt($('#tNum').value, 10) || 0) + 1; });
+$('#tNum').addEventListener('keydown', e => { if (e.key === 'Enter') tkSave(); });
+$('#tSave').addEventListener('click', tkSave);
+$('#tList').addEventListener('click', e => { const b = e.target.closest('button[data-rec]'); if (b) tkCancelRec(b); });
+$('#tClose').addEventListener('click', closeTk);
+$('#tOut').addEventListener('click', () => { const it = tCur; closeTk(); openReport(it, '棚卸中ですが、この品番の出荷（入荷）が必要です：'); });
+$('#alist').addEventListener('click', e => {
+  const li = e.target.closest('li[data-req]'); if (!li) return;
+  if (e.target.closest('.ok')) decide(li, '承認');
+  else if (e.target.closest('.ng') && confirm('この依頼を却下しますか？')) decide(li, '却下');
+});
+$('#hist').addEventListener('toggle', loadHistory);
+$('#reload').addEventListener('click', () => reload(false, true));
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeSheet(); closeAdmin(); closeTk(); closeReport(); } });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && Date.now() - lastLoad > 60000) reload(true);
+});
+/* 棚卸の状態は30秒ごと、バックオフィスの件数は2分ごとに確認 */
+setInterval(() => { if (!document.hidden && API_URL) pollTk(); }, 30000);
+setInterval(() => { if (!document.hidden && API_URL) refreshInbox(); }, 120000);
+</script>
+</body>
+</html>
 <style>
 :root{
   --bg:#E9EDF0; --panel:#FFFFFF; --ink:#16212B; --sub:#5B6B79; --line:#D3DAE0;
