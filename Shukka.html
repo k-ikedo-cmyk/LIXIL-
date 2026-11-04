@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>出荷リスト（在庫引当）</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+<style>
+:root{--ink:#16212B;--sub:#5B6B79;--line:#C9D1D8;--bg:#E9EDF0;--out:#B23F2B}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Hiragino Sans","Noto Sans JP","Yu Gothic UI","Meiryo",sans-serif}
+.ctl{position:sticky;top:0;z-index:2;background:var(--ink);color:#fff;padding:10px 12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.ctl h1{font-size:16px;margin:0 8px 0 0}
+.ctl label{font-size:14px;display:flex;align-items:center;gap:4px}
+.ctl input{font:inherit;font-size:15px;padding:6px 8px;border:0;border-radius:6px}
+.ctl button,.ctl a{font:inherit;font-size:14px;padding:7px 14px;border-radius:8px;border:1px solid #ffffff66;background:none;color:#fff;text-decoration:none;cursor:pointer}
+.ctl .pr{background:#fff;color:var(--ink);font-weight:700;border-color:#fff}
+#info{font-size:13px;color:#C9D3DB;margin-left:auto}
+.page{max-width:210mm;margin:12px auto;background:#fff;padding:10mm 10mm 12mm}
+.head{display:flex;align-items:baseline;gap:12px;border-bottom:2px solid var(--ink);padding-bottom:4px;margin-bottom:4px}
+.head h2{font-size:18px;margin:0}
+.head span{font-size:12px;color:var(--sub)}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+thead{display:table-header-group}
+th{font-size:11px;color:var(--sub);font-weight:700;text-align:center;border-bottom:1.5px solid var(--ink);padding:4px 2px}
+td{border-bottom:1px solid var(--line);padding:3px 4px;text-align:center;font-size:14px}
+tr{break-inside:avoid;page-break-inside:avoid}
+td.nk{font-weight:700;font-size:15px;white-space:nowrap}
+td.hb{text-align:left;font-weight:700;font-size:16px;word-break:break-all}
+td.hb small{display:block;font-weight:400;font-size:10px;color:var(--sub)}
+td.rem{font-size:20px;font-weight:700}
+td.qr{width:26mm;padding:2mm 1mm}
+td.qr svg{width:22mm;height:22mm;display:block;margin:0 auto}
+td.chk{width:22mm}
+td.chk div{border:1px solid var(--ink);height:14mm;border-radius:2px}
+tr.nkTop td{border-top:2px solid var(--ink)}
+.warn{color:var(--out);font-size:10px;font-weight:700;display:block}
+.empty{padding:30px;text-align:center;color:var(--sub)}
+@page{size:A4 portrait;margin:8mm}
+@media print{
+  body{background:#fff}
+  .ctl{display:none}
+  .page{margin:0;padding:0;max-width:none}
+}
+</style>
+</head>
+<body>
+<div class="ctl">
+  <h1>出荷リスト</h1>
+  <label>納期 <input id="from" type="date"></label>
+  <label>〜 <input id="to" type="date"></label>
+  <button id="reload">更新</button>
+  <button id="print" class="pr">印刷</button>
+  <a id="back" href="index.html">在庫アプリへ</a>
+  <span id="info"></span>
+</div>
+<div class="page">
+  <div class="head"><h2>LIXIL 出荷リスト（在庫から出荷）</h2><span id="sub"></span></div>
+  <div id="out"><div class="empty">読み込み中…</div></div>
+</div>
+<script>
+/* ===== 設定：index.html と同じにする ===== */
+const API_URL_MAIN = 'https://script.google.com/macros/s/AKfycbxf481wbIwO8GbB8Xgp-cgQp8Zbm9fmECfJjBcA2fFKGxOusZSOPm1bZvvJH-KX2zOg/exec';
+const API_URL_TEST = '';
+const API_KEY = 'yasumoku-zaiko';
+/* ======================================= */
+const TEST = new URLSearchParams(location.search).has('test');
+const API_URL = TEST ? API_URL_TEST : API_URL_MAIN;
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+/* QRの中身：在庫アプリのURL＋?ship=キー（このページと同じフォルダの index.html） */
+const APP_URL = new URL('index.html', location.href).href.split('?')[0];
+if (TEST) $('#back').href = 'index.html?test';
+
+let rows = [];
+const ymd = k => k.slice(0, 4) + '-' + k.slice(4, 6) + '-' + k.slice(6, 8);
+
+function qrSvg(text){
+  const q = qrcode(0, 'M');
+  q.addData(text);
+  q.make();
+  return q.createSvgTag({ cellSize: 2, margin: 2, scalable: true });
+}
+
+function render(){
+  const f = $('#from').value, t = $('#to').value;
+  const list = rows.filter(r => (!f || ymd(r.k) >= f) && (!t || ymd(r.k) <= t));
+  const now = new Date();
+  $('#sub').textContent = `印刷 ${now.getMonth() + 1}/${now.getDate()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` +
+    `　${list.length}件　残り合計 ${list.reduce((s, r) => s + r.rem, 0)}枚` + (f || t ? `　納期 ${f || ''}〜${t || ''}` : '');
+  $('#info').textContent = `${list.length}件`;
+  if (!list.length) { $('#out').innerHTML = '<div class="empty">在庫から出荷する未出荷の受注はありません</div>'; return; }
+  let prev = '';
+  $('#out').innerHTML = `<table><thead><tr><th>納期</th><th>品番</th><th>注文</th><th>出荷済</th><th>残り</th><th>在庫</th><th>QR</th><th>確認</th></tr></thead><tbody>` +
+    list.map(r => {
+      const top = prev && prev !== r.nouki ? ' class="nkTop"' : '';
+      const nk = prev === r.nouki ? '' : esc(r.nouki);
+      prev = r.nouki;
+      const low = r.stock != null && r.stock < r.rem ? `<span class="warn">在庫不足</span>` : '';
+      return `<tr${top}><td class="nk">${nk}</td>
+        <td class="hb">${esc(r.hb)}<small>受注明細 ${r.row}行目${r.st === '新規' ? '・新規' : ''}</small></td>
+        <td>${r.qty}</td><td>${r.done || ''}</td><td class="rem">${r.rem}</td><td>${r.stock == null ? '' : r.stock}${low}</td>
+        <td class="qr">${qrSvg(APP_URL + '?ship=' + encodeURIComponent(r.k) + (TEST ? '&test' : ''))}</td>
+        <td class="chk"><div></div></td></tr>`;
+    }).join('') + '</tbody></table>';
+}
+
+function load(){
+  if (!API_URL) { $('#out').innerHTML = '<div class="empty">テスト用のURL（API_URL_TEST）が未設定です</div>'; return; }
+  $('#reload').disabled = true;
+  const q = new URLSearchParams({ action: 'shipList', key: API_KEY });
+  fetch(API_URL + '?' + q).then(r => r.json())
+    .then(j => { if (!j.ok) throw new Error(j.error); rows = j.data; render(); })
+    .catch(e => { $('#out').innerHTML = `<div class="empty">読み込めませんでした：${esc(e.message)}</div>`; })
+    .finally(() => { $('#reload').disabled = false; });
+}
+
+$('#from').addEventListener('change', render);
+$('#to').addEventListener('change', render);
+$('#reload').addEventListener('click', load);
+$('#print').addEventListener('click', () => window.print());
+load();
+</script>
+</body>
+</html>
