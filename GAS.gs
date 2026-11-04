@@ -13,6 +13,27 @@
  *  - 出庫「受注出荷」…受注明細の在庫引当・未出荷（新規を含む）分を納期の早い順に消し込む（出荷済数 J列・状態 G列）
  *  - 入出庫履歴の H列に区分、I列に消し込んだ行（例 R12:3,R15:2）を残す
  *  - 変更依頼の承認で数量が変わったときは、消し込みも差分だけ直す
+ *
+ * 棚卸モード（2026-10-30〜）
+ *  - 「棚卸開始」で全端末が棚卸モード。入力は「棚卸記録」に1回1行（置き場：倉庫／工場）、同じ品番は足し算
+ *  - 棚卸モード中（実施中）は入庫・出庫・調整をサーバー側で止め、Google Chatに通知
+ *  - 端末ごとに「この端末は終了」で棚卸の画面を抜けられる（全体は棚卸中のまま。もう一度「棚卸に戻る」で続き）
+ *  - 「全体を完了」で確認待ち。数えていない品番は確定しても帳簿のまま（在庫ありの未棚卸は確認画面とChatで知らせる）
+ *  - バックオフィスがPINで「確定」すると製品マスタH列へ反映。
+ *    確定後の在庫 ＝ 棚卸数 ＋ その品番を最後に数えた時刻より後の入出庫（完了〜確定の間の出荷など）
+ *  - 誤って始めたときは、バックオフィスがPINで「中止」（在庫は変えずに棚卸モードを終わらせる）
+ *  - 確定時に受注明細の在庫引当（未出荷）で在庫が足りなくなった行をChatに通知（受注明細L列にも「不足」表示）
+ *
+ * 報告・通知（2026-10-30〜）
+ *  - 「報告」で現場からテキストを送ると「報告」シートに記録し、Google Chatに通知
+ *  - 変更依頼・棚卸の開始／完了／確定・棚卸中の入出庫の試み・在庫マイナス・受注残超えの出荷・エラーもChatに通知
+ *
+ * 出荷リスト・QR出荷（2026-11-05〜）
+ *  - 出荷リスト（shukka.html）：受注明細の 引当「在庫」・状態「新規／未出荷」・残り（数量−出荷済数）がある行をQR付きで印刷
+ *  - QRの中身：在庫アプリのURL ＋ ?ship=納期yyyymmdd-製品ID（例 ...index.html?ship=20261106-38）
+ *  - QRを読むと 注文・出荷済・残り を表示し、数量の初期値は残り。出庫を押すとその行だけを消し込む
+ *  - 分納：残りより少ない数で出庫すると「未出荷」のまま、残り0で「出荷済」
+ *  - 出荷済み・残り超え・棚卸中は出庫できない
  */
 
 /* ===== 書き込み先：テストは改修版、本番は元のスプシのIDにする ===== */
@@ -26,8 +47,21 @@ const SH_INV = '棚卸履歴';   // 無ければ自動で作成
 const SH_REQ = '変更依頼';   // 無ければ自動で作成
 const SH_ORDER = '受注明細';
 const SH_PO = '外注指示';
+const SH_TK = '棚卸';         // 棚卸ごとの記録（無ければ自動で作成）
+const SH_TKREC = '棚卸記録';  // 棚卸モードでの入力1件ずつ（無ければ自動で作成）
+const SH_RPT = '報告';        // 現場からの報告（無ければ自動で作成）
 const ADMIN_PIN = '0000';    // 承認用の管理者PIN（必ず変更する）
 const STAFF = ['池戸', '山田', '佐藤']; // 担当者リスト（ここを編集）
+const LOCS = ['倉庫', '工場']; // 棚卸の置き場（ここを編集）
+
+/* ===== Google Chat 通知 =====
+ * WebhookのURLはコードに書かず、Apps Scriptの「プロジェクトの設定 → スクリプト プロパティ」に
+ * プロパティ名 CHAT_WEBHOOK で保存する（GitHubなどにURLが残らないように）。未設定なら通知しない。
+ * ============================ */
+const chatWebhook_ = () => PropertiesService.getScriptProperties().getProperty('CHAT_WEBHOOK') || '';
+
+const PROP_TK = 'TK_STATE';   // 棚卸モードの状態（スクリプトプロパティ）
+const TK_AUTO = '（自動0）';   // 旧仕様で完了時に在庫0の未棚卸を0で記録したときの置き場名（差し戻しで取り消す）
 
 // 製品マスタの列番号（1始まり）
 const COL = { ID: 1, HB: 2, CAT: 3, W: 4, H: 5, PRICE: 6, INIT: 7, STOCK: 8, TARGET: 9, JUDGE: 10,
@@ -40,34 +74,62 @@ const SUB_DEFAULT = { '入庫': '通常', '出庫': 'その他' };
 // 簡易キー（index.html の API_KEY と同じ文字列にする）
 const API_KEY = 'yasumoku-zaiko';
 
-/** 読み込み：?action=boot | history&id=○ */
+/** 読み込み：?action=boot | history&id=○ | shipList | shipInfo&k=○ */
 function doGet(e) {
   try {
     const p = e.parameter || {};
     checkKey_(p.key);
     const action = p.action || 'boot';
-    if (action === 'boot') return raw_('{"ok":true,"data":' + getBootJson_(p.fresh === '1') + '}');
+    if (action === 'boot') return raw_('{"ok":true,"data":' + getBootJson_(p.fresh === '1') +
+      ',"tk":' + JSON.stringify(tkView_()) + '}');
     if (action === 'history') return json_({ ok: true, data: getHistory(p.id) });
     if (action === 'requests') return json_({ ok: true, data: listRequests() });
+    if (action === 'inbox') return json_({ ok: true, data: inbox_() });
+    if (action === 'tk') return json_({ ok: true, data: tkView_() });
+    if (action === 'tkEntries') return json_({ ok: true, data: tkEntries_(p.id) });
+    if (action === 'shipList') return json_({ ok: true, data: shipList() });
+    if (action === 'shipInfo') return json_({ ok: true, data: shipInfo(p.k) });
     throw new Error('不明な操作です: ' + action);
   } catch (err) {
     return json_({ ok: false, error: err.message });
   }
 }
 
-/** 書き込み：入庫・出庫・調整 */
+/** 書き込み：入庫・出庫・調整・棚卸モード・報告・QR出荷 */
 function doPost(e) {
+  let p = {};
   try {
-    const p = JSON.parse(e.postData.contents);
+    p = JSON.parse(e.postData.contents);
     checkKey_(p.key);
     const action = p.action || 'register';
     if (action === 'register') return json_({ ok: true, data: register(p) });
     if (action === 'request') return json_({ ok: true, data: createRequest(p) });
     if (action === 'approve') return json_({ ok: true, data: processRequest(p) });
+    if (action === 'report') return json_({ ok: true, data: createReport(p) });
+    if (action === 'reports') return json_({ ok: true, data: listReports(p) });
+    if (action === 'reportDone') return json_({ ok: true, data: reportDone(p) });
+    if (action === 'tkStart') return json_({ ok: true, data: tkStart(p) });
+    if (action === 'tkCount') return json_({ ok: true, data: tkCount(p) });
+    if (action === 'tkCancel') return json_({ ok: true, data: tkCancel(p) });
+    if (action === 'tkFinish') return json_({ ok: true, data: tkFinish(p) });
+    if (action === 'tkReview') return json_({ ok: true, data: tkReview(p) });
+    if (action === 'tkConfirm') return json_({ ok: true, data: tkConfirm(p) });
+    if (action === 'tkReturn') return json_({ ok: true, data: tkReturn(p) });
+    if (action === 'tkAbort') return json_({ ok: true, data: tkAbort(p) });
+    if (action === 'ship') return json_({ ok: true, data: ship(p) });
     throw new Error('不明な操作です: ' + action);
   } catch (err) {
+    if (!err.quiet) notify_('⚠️ エラー：' + err.message + '（操作 ' + (p.action || 'register') +
+      (p.staff ? '・' + p.staff : '') + '）');
     return json_({ ok: false, error: err.message });
   }
+}
+
+/** 入力ミスなど、Chatに通知しないエラー */
+function fail_(msg) {
+  const e = new Error(msg);
+  e.quiet = true;
+  return e;
 }
 
 function checkKey_(k) {
@@ -151,6 +213,17 @@ function register(p) {
     if (SUBS[p.type].indexOf(sub) < 0) throw new Error('区分が正しくありません: ' + sub);
   }
 
+  // 棚卸モード中は止める（実施中は入出庫すべて、確認待ちは1品番ずつの棚卸だけ）
+  const tk = getTk_();
+  if (tk && (tk.status === '実施中' || p.type === '棚卸')) {
+    const it = findItem_(p.id);
+    notify_('⛔ 棚卸中のため登録できませんでした：' + (it ? it.hb : 'ID ' + p.id) + '　' +
+      (sub && sub !== '通常' && sub !== 'その他' ? sub : p.type) + ' ' + qty + '（' + (p.staff || '') + '）');
+    throw fail_(tk.status === '実施中'
+      ? '棚卸中のため入出庫できません（棚卸の完了後に登録してください）'
+      : '棚卸の確認待ちのため、1品番ずつの棚卸はできません');
+  }
+
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
@@ -198,6 +271,14 @@ function register(p) {
 
     log.appendRow([recId, now, pid, p.type, qty, p.staff || '', p.note || '', sub, fmtAlloc_(res.list)]);
     updateCache_(p.id, after, kind === 'ord' ? -res.done : 0, kind === 'po' ? -res.done : 0);
+
+    // おかしなことはChatへ
+    const who = '（' + (p.staff || '') + '・' + recId + '）';
+    if (after < 0) notify_('⚠️ 在庫がマイナスになりました：' + hb + '　' + before + ' → ' + after + who);
+    if (kind === 'ord' && qty > res.done) notify_('⚠️ 在庫から出す未出荷の受注を超えて出荷：' + hb + '　出荷 ' + qty +
+      '、消し込み ' + res.done + who);
+    if (kind === 'po' && qty > res.done) notify_('⚠️ 未入荷の発注を超えて入荷：' + hb + '　入荷 ' + qty +
+      '、消し込み ' + res.done + who);
     return { id: String(p.id), stock: after, sub: sub, matched: res.done, extra: qty - res.done };
   } finally {
     lock.releaseLock();
@@ -401,6 +482,8 @@ function createRequest(p) {
 
     const reqId = 'REQ-' + String(rq.getLastRow()).padStart(4, '0');
     rq.appendRow([reqId, new Date(), p.recId, pid, hb, kind, oldQty, newQty, reason, p.staff || '', '未処理', '', '', '']);
+    notify_('✏️ 変更依頼 ' + reqId + '：' + hb + '　' + kind + ' ' + oldQty + ' → ' + newQty +
+      '　理由：' + reason + '（' + (p.staff || '') + '）');
     return { reqId: reqId };
   } finally {
     lock.releaseLock();
@@ -500,6 +583,615 @@ function processRequest(p) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/* ================= 棚卸モード ================= */
+
+function getTk_() {
+  const s = PropertiesService.getScriptProperties().getProperty(PROP_TK);
+  return s ? JSON.parse(s) : null;
+}
+
+function setTk_(tk) {
+  const pr = PropertiesService.getScriptProperties();
+  if (tk) pr.setProperty(PROP_TK, JSON.stringify(tk)); else pr.deleteProperty(PROP_TK);
+}
+
+function checkPin_(pin) {
+  if (String(pin) !== ADMIN_PIN) throw new Error('管理者PINが違います');
+}
+
+function fmtTs_(ms) {
+  return ms ? Utilities.formatDate(new Date(ms), Session.getScriptTimeZone(), 'MM/dd HH:mm') : '';
+}
+
+/** 起動データ（キャッシュ）から品番を引く */
+function findItem_(id) {
+  return JSON.parse(getBootJson_(false)).items.find(x => x.id === String(id)) || null;
+}
+
+function newSheet_(ss, name, head, dateCols) {
+  let sh = ss.getSheetByName(name);
+  if (!sh) {
+    sh = ss.insertSheet(name);
+    sh.appendRow(head);
+    (dateCols || []).forEach(c => sh.getRange(c + ':' + c).setNumberFormat('yyyy/MM/dd HH:mm'));
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+const tkSheet_ = ss => newSheet_(ss, SH_TK, ['棚卸ID', '開始日時', '開始者', '完了日時', '完了者', '確定日時', '確認者',
+  '状態', '品番数', '差異のある品番', '差異合計（絶対値）', 'メモ'], ['B', 'D', 'F']);
+const tkRecSheet_ = ss => newSheet_(ss, SH_TKREC, ['記録ID', '棚卸ID', '日時', '製品ID', '品番', '置き場', '数量',
+  '担当者', '状態', '取消日時'], ['C', 'J']);
+const rptSheet_ = ss => newSheet_(ss, SH_RPT, ['報告ID', '日時', '担当者', '製品ID', '品番', '内容', '状態',
+  '確認日時', '確認者'], ['B', 'H']);
+
+/** 棚卸シートの行を書き換える（patch は {列番号: 値}） */
+function tkSession_(ss, tkId, patch) {
+  const sh = tkSheet_(ss);
+  const row = findRow_(sh, tkId);
+  if (!row) return;
+  Object.keys(patch).forEach(c => sh.getRange(row, Number(c)).setValue(patch[c]));
+}
+
+/** 今の棚卸の有効な入力（取消を除く） */
+function tkEntriesAll_(ss, tkId) {
+  const sh = ss.getSheetByName(SH_TKREC);
+  if (!sh || sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, 10).getValues()
+    .map((r, i) => ({ row: i + 2, rec: String(r[0]), tk: String(r[1]), ts: r[2] instanceof Date ? r[2].getTime() : 0,
+      pid: String(r[3]), hb: String(r[4]), loc: String(r[5]), qty: Number(r[6]) || 0, staff: String(r[7]), st: String(r[8]) }))
+    .filter(x => x.tk === tkId && x.st === '有効');
+}
+
+/** 品番ごとの合計 { pid: { t: 合計, l: {置き場: 数}, last: 最後に数えた時刻, by: [担当者] } } */
+function tkCounts_(entries) {
+  const out = {};
+  entries.forEach(x => {
+    const c = out[x.pid] || (out[x.pid] = { t: 0, l: {}, last: 0, by: [] });
+    c.t += x.qty;
+    c.l[x.loc] = (c.l[x.loc] || 0) + x.qty;
+    c.last = Math.max(c.last, x.ts);
+    if (x.staff && c.by.indexOf(x.staff) < 0) c.by.push(x.staff);
+  });
+  return out;
+}
+
+/** 画面用の棚卸の状態（棚卸していなければ status は空） */
+function tkView_() {
+  const tk = getTk_();
+  if (!tk) return { status: '', locs: LOCS };
+  const counts = tkCounts_(tkEntriesAll_(SpreadsheetApp.openById(SS_ID), tk.id));
+  const c = {};
+  Object.keys(counts).forEach(k => c[k] = { t: counts[k].t, l: counts[k].l });
+  return { id: tk.id, status: tk.status, start: fmtTs_(tk.start), startBy: tk.startBy,
+    end: fmtTs_(tk.end), endBy: tk.endBy || '', locs: LOCS, counts: c };
+}
+
+/** 1品番の入力一覧（新しい順） */
+function tkEntries_(id) {
+  const tk = getTk_();
+  if (!tk) return [];
+  return tkEntriesAll_(SpreadsheetApp.openById(SS_ID), tk.id)
+    .filter(x => x.pid === String(id))
+    .sort((a, b) => b.ts - a.ts)
+    .map(x => ({ rec: x.rec, d: fmtTs_(x.ts), loc: x.loc, qty: x.qty, staff: x.staff }));
+}
+
+/** 棚卸を始める */
+function tkStart(p) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    if (getTk_()) throw fail_('すでに棚卸中です');
+    const ss = SpreadsheetApp.openById(SS_ID);
+    const now = new Date();
+    const id = 'TK-' + Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyyMMdd-HHmm');
+    tkSheet_(ss).appendRow([id, now, p.staff || '', '', '', '', '', '実施中', '', '', '', '']);
+    setTk_({ id: id, status: '実施中', start: now.getTime(), startBy: p.staff || '' });
+    notify_('📋 棚卸を開始しました ' + id + '（' + (p.staff || '') + '）。完了するまで入出庫はできません');
+    return tkView_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** 棚卸数を1件入れる（同じ品番は足し算） */
+function tkCount(p) {
+  const qty = Math.trunc(Number(p.qty));
+  if (!p.id || p.qty === '' || isNaN(qty) || qty < 0) throw fail_('数量は0以上で入力してください');
+  if (LOCS.indexOf(p.loc) < 0) throw fail_('置き場を選んでください');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const tk = getTk_();
+    if (!tk || tk.status !== '実施中') throw fail_('棚卸は実施中ではありません（画面を更新してください）');
+    const ss = SpreadsheetApp.openById(SS_ID);
+    const m = ss.getSheetByName(SH_MASTER);
+    const mrow = findRow_(m, p.id);
+    if (!mrow) throw new Error('製品ID ' + p.id + ' がマスタにありません');
+    const hb = m.getRange(mrow, COL.HB).getValue();
+    const sh = tkRecSheet_(ss);
+    const rec = 'TC-' + String(sh.getLastRow()).padStart(5, '0');
+    sh.appendRow([rec, tk.id, new Date(), String(p.id), hb, p.loc, qty, p.staff || '', '有効', '']);
+    const list = tkEntries_(p.id);
+    return { id: String(p.id), total: list.reduce((s, x) => s + x.qty, 0), list: list };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** 棚卸の入力を取り消す */
+function tkCancel(p) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const tk = getTk_();
+    if (!tk || tk.status !== '実施中') throw fail_('棚卸は実施中ではありません（画面を更新してください）');
+    const ss = SpreadsheetApp.openById(SS_ID);
+    const sh = tkRecSheet_(ss);
+    const row = findRow_(sh, p.rec);
+    if (!row) throw new Error('記録 ' + p.rec + ' が見つかりません');
+    const r = sh.getRange(row, 1, 1, 10).getValues()[0];
+    if (String(r[1]) !== tk.id) throw fail_('今の棚卸の記録ではありません');
+    sh.getRange(row, 9, 1, 2).setValues([['取消' + (p.staff ? '（' + p.staff + '）' : ''), new Date()]]);
+    const list = tkEntries_(r[3]);
+    return { id: String(r[3]), total: list.reduce((s, x) => s + x.qty, 0), list: list };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** 棚卸を完了して確認待ちにする */
+function tkFinish(p) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const tk = getTk_();
+    if (!tk || tk.status !== '実施中') throw fail_('棚卸は実施中ではありません（画面を更新してください）');
+    const ss = SpreadsheetApp.openById(SS_ID);
+    const counts = tkCounts_(tkEntriesAll_(ss, tk.id));
+    const items = getMaster();
+    // 数えていない品番は自動で0にしない（確定しても帳簿のまま）
+    const now = new Date();
+    const done = items.filter(it => counts[it.id]).length;
+    const todoS = items.filter(it => it.stock > 0 && !counts[it.id]);
+    tk.status = '確認待ち';
+    tk.end = now.getTime();
+    tk.endBy = p.staff || '';
+    setTk_(tk);
+    tkSession_(ss, tk.id, { 4: now, 5: p.staff || '', 8: '確認待ち', 9: items.length });
+    notify_('✅ 棚卸が完了しました ' + tk.id + '（' + (p.staff || '') + '）。入出庫を再開できます。\n' +
+      '棚卸した品番 ' + done + '／' + items.length +
+      (todoS.length ? '\n⚠️ 在庫ありで未棚卸 ' + todoS.length + ' 品番（確定しても帳簿のまま）：' +
+        todoS.slice(0, 10).map(it => it.hb + '(' + it.stock + ')').join('、') + (todoS.length > 10 ? ' ほか' : '') : '') +
+      '\nバックオフィスで「確認・確定」してください');
+    return tkView_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * 確定したときの在庫を計算する
+ * 確定後の在庫 ＝ 棚卸数 ＋ その品番を最後に数えた時刻より後の入出庫（入庫＋、出庫−、調整±）
+ */
+function tkCalc_(ss, tk) {
+  const counts = tkCounts_(tkEntriesAll_(ss, tk.id));
+  const m = ss.getSheetByName(SH_MASTER);
+  const n = m.getLastRow() - 1;
+  const mv = m.getRange(2, 1, n, COL.JUDGE).getValues();
+
+  const post = {};
+  tail_(ss.getSheetByName(SH_LOG), 5, 3000).forEach(r => {
+    const ts = r[1] instanceof Date ? r[1].getTime() : 0;
+    const pid = String(r[2]);
+    const c = counts[pid];
+    if (!c || ts <= c.last) return;
+    const q = Number(r[4]) || 0;
+    post[pid] = (post[pid] || 0) + (r[3] === '出庫' ? -q : q);
+  });
+
+  const rows = [];
+  mv.forEach((r, i) => {
+    const pid = String(r[0]);
+    if (r[0] === '' || r[1] === '' || !counts[pid]) return;
+    const now = r[COL.STOCK - 1] === '' ? (Number(r[COL.INIT - 1]) || 0) : Number(r[COL.STOCK - 1]);
+    const ps = post[pid] || 0;
+    const c = counts[pid];
+    const book = now - ps;   // 数えた時点の帳簿
+    rows.push({ i: i, id: pid, hb: String(r[1]), target: r[COL.TARGET - 1], now: now, book: book,
+      cnt: c.t, l: c.l, by: c.by, post: ps, diff: c.t - book, after: c.t + ps });
+  });
+  return { m: m, n: n, mv: mv, rows: rows, counts: counts };
+}
+
+/** 受注明細の在庫引当（未出荷）が在庫で足りない行 */
+function shortages_(ss, stockOf) {
+  const sh = ss.getSheetByName(SH_ORDER);
+  const last = sh.getLastRow();
+  if (last < 2) return [];
+  const tz = Session.getScriptTimeZone();
+  const by = {};
+  sh.getRange(2, 1, last - 1, 10).getValues().forEach((r, i) => {
+    if (r[1] === '' || r[6] !== '未出荷' || r[5] !== '在庫') return;
+    const rem = (Number(r[3]) || 0) - (Number(r[9]) || 0);
+    if (rem <= 0) return;
+    (by[String(r[1])] = by[String(r[1])] || []).push({ row: i + 2, d: r[0], hb: String(r[2]), rem: rem });
+  });
+  const out = [];
+  Object.keys(by).forEach(pid => {
+    const stock = stockOf(pid);
+    if (stock == null) return;
+    let cum = 0;
+    by[pid].sort((a, b) => ((a.d instanceof Date ? a.d.getTime() : 9e15) - (b.d instanceof Date ? b.d.getTime() : 9e15)) || a.row - b.row)
+      .forEach(x => {
+        cum += x.rem;
+        if (cum > stock) out.push({ row: x.row, d: x.d instanceof Date ? Utilities.formatDate(x.d, tz, 'M/d') : String(x.d),
+          hb: x.hb, qty: x.rem, lack: Math.min(x.rem, cum - stock) });
+      });
+  });
+  return out.sort((a, b) => a.row - b.row);
+}
+
+/** バックオフィスの確認画面のデータ */
+function tkReview(p) {
+  checkPin_(p.pin);
+  const tk = getTk_();
+  if (!tk) return { status: '' };
+  const ss = SpreadsheetApp.openById(SS_ID);
+  const c = tkCalc_(ss, tk);
+  const map = {};
+  c.rows.forEach(x => map[x.id] = x.after);
+  const diffs = c.rows.filter(x => x.diff !== 0 || x.post !== 0)
+    .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff))
+    .map(x => ({ id: x.id, hb: x.hb, book: x.book, cnt: x.cnt, l: x.l, diff: x.diff, post: x.post, after: x.after }));
+  return {
+    id: tk.id, status: tk.status, start: fmtTs_(tk.start), startBy: tk.startBy, end: fmtTs_(tk.end), endBy: tk.endBy || '',
+    n: c.rows.length, diffN: c.rows.filter(x => x.diff !== 0).length,
+    plus: c.rows.reduce((s, x) => s + Math.max(0, x.diff), 0), minus: c.rows.reduce((s, x) => s + Math.min(0, x.diff), 0),
+    todo: (() => { const out = []; c.mv.forEach(r => { const id = String(r[0]); if (r[0] === '' || c.counts[id]) return;
+      const st = r[COL.STOCK - 1] === '' ? (Number(r[COL.INIT - 1]) || 0) : Number(r[COL.STOCK - 1]);
+      if (st > 0) out.push({ hb: String(r[1]), stock: st }); }); return out; })(),
+    diffs: diffs, short: tk.status === '確認待ち' ? shortages_(ss, pid => map[pid] == null ? null : map[pid]) : []
+  };
+}
+
+/** 確定：製品マスタの在庫に反映し、棚卸履歴に残す */
+function tkConfirm(p) {
+  checkPin_(p.pin);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const tk = getTk_();
+    if (!tk || tk.status !== '確認待ち') throw fail_('確認待ちの棚卸がありません（画面を更新してください）');
+    const ss = SpreadsheetApp.openById(SS_ID);
+    const c = tkCalc_(ss, tk);
+    const now = new Date();
+
+    // 棚卸履歴（品番ごとに1行）
+    const inv = invSheet_(ss);
+    const base = inv.getLastRow();
+    if (c.rows.length) {
+      inv.getRange(base + 1, 1, c.rows.length, 9).setValues(c.rows.map((x, k) => [
+        'INV-' + String(base + k).padStart(4, '0'), now, x.id, x.hb, x.book, x.cnt, x.diff, x.by.join('・'),
+        tk.id + ' ' + Object.keys(x.l).map(l => l + x.l[l]).join(' ') +
+        (x.post ? '／確定前の入出庫 ' + (x.post > 0 ? '+' : '') + x.post + '→在庫 ' + x.after : '') +
+        '／確認 ' + (p.staff || '')
+      ]));
+    }
+
+    // 製品マスタ H列（現在在庫）・J列（判定）
+    const H = c.mv.map(r => [r[COL.STOCK - 1]]);
+    const J = c.mv.map(r => [r[COL.JUDGE - 1]]);
+    c.rows.forEach(x => { H[x.i][0] = x.after; J[x.i][0] = judge_(x.after, x.target); });
+    c.m.getRange(2, COL.STOCK, c.n, 1).setValues(H);
+    c.m.getRange(2, COL.JUDGE, c.n, 1).setValues(J);
+
+    const diffN = c.rows.filter(x => x.diff !== 0).length;
+    const abs = c.rows.reduce((s, x) => s + Math.abs(x.diff), 0);
+    tkSession_(ss, tk.id, { 6: now, 7: p.staff || '', 8: '確定', 10: diffN, 11: abs });
+    setTk_(null);
+    CacheService.getScriptCache().remove(CACHE_KEY);
+    SpreadsheetApp.flush();
+
+    const map = {};
+    c.rows.forEach(x => map[x.id] = x.after);
+    const short = shortages_(ss, pid => map[pid] == null ? null : map[pid]);
+    let msg = '📦 棚卸を確定しました ' + tk.id + '（確認 ' + (p.staff || '') + '）\n' +
+      '棚卸した品番 ' + c.rows.length + '（数えていない品番は帳簿のまま）、差異のある品番 ' + diffN + '、差異合計 ' + abs;
+    const top = c.rows.filter(x => x.diff !== 0).sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff)).slice(0, 10);
+    if (top.length) msg += '\n差異の大きい品番：\n' + top.map(x => '・' + x.hb + '　' + x.book + ' → ' + x.cnt +
+      '（' + (x.diff > 0 ? '+' : '') + x.diff + '）').join('\n');
+    if (short.length) msg += '\n\n🔴 在庫引当の受注で在庫が足りなくなりました（生産の手配が必要）：\n' +
+      short.slice(0, 15).map(s => '・納期 ' + s.d + '　' + s.hb + '　' + s.qty + '枚のうち ' + s.lack + ' 不足（受注明細 ' + s.row + '行目）').join('\n') +
+      (short.length > 15 ? '\nほか ' + (short.length - 15) + ' 件' : '');
+    notify_(msg);
+    return { id: tk.id, n: c.rows.length, diffN: diffN, short: short };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** 差し戻し：確認待ち → 実施中（完了時に自動で入れた0は取り消す） */
+function tkReturn(p) {
+  checkPin_(p.pin);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const tk = getTk_();
+    if (!tk || tk.status !== '確認待ち') throw fail_('確認待ちの棚卸がありません（画面を更新してください）');
+    const ss = SpreadsheetApp.openById(SS_ID);
+    const sh = tkRecSheet_(ss);
+    const now = new Date();
+    tkEntriesAll_(ss, tk.id).filter(x => x.loc === TK_AUTO)
+      .forEach(x => sh.getRange(x.row, 9, 1, 2).setValues([['取消（差し戻し）', now]]));
+    tk.status = '実施中';
+    tk.end = 0;
+    tk.endBy = '';
+    setTk_(tk);
+    tkSession_(ss, tk.id, { 4: '', 5: '', 8: '実施中', 12: '差し戻し ' + fmtTs_(now.getTime()) + ' ' + (p.staff || '') +
+      (p.reason ? '：' + p.reason : '') });
+    notify_('↩️ 棚卸を差し戻しました ' + tk.id + '（' + (p.staff || '') + '）' + (p.reason ? '：' + p.reason : '') +
+      '。もう一度棚卸中になり、入出庫は止まります');
+    return tkView_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** 中止：誤って始めたときなど。在庫は変えずに棚卸モードを終わらせる（入力は「棚卸記録」に残す） */
+function tkAbort(p) {
+  checkPin_(p.pin);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const tk = getTk_();
+    if (!tk) throw fail_('棚卸は行われていません（画面を更新してください）');
+    const ss = SpreadsheetApp.openById(SS_ID);
+    const n = tkEntriesAll_(ss, tk.id).length;
+    const now = new Date();
+    setTk_(null);
+    tkSession_(ss, tk.id, { 6: now, 7: p.staff || '', 8: '中止', 12: '中止 ' + fmtTs_(now.getTime()) + ' ' + (p.staff || '') +
+      (p.reason ? '：' + p.reason : '') + '（入力 ' + n + ' 件は反映せず）' });
+    notify_('🛑 棚卸を中止しました ' + tk.id + '（' + (p.staff || '') + '）' + (p.reason ? '：' + p.reason : '') +
+      '。在庫は変えていません。入出庫を再開できます');
+    return tkView_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/* ================= 報告 ================= */
+
+function createReport(p) {
+  const text = String(p.text || '').trim().slice(0, 1000);
+  if (!text) throw fail_('報告の内容を入力してください');
+  const ss = SpreadsheetApp.openById(SS_ID);
+  const sh = rptSheet_(ss);
+  const it = p.id ? findItem_(p.id) : null;
+  const id = 'RPT-' + String(sh.getLastRow()).padStart(4, '0');
+  sh.appendRow([id, new Date(), p.staff || '', it ? it.id : '', it ? it.hb : '', text, '未確認', '', '']);
+  notify_('📝 報告 ' + id + '（' + (p.staff || '') + '）' + (it ? '　品番 ' + it.hb : '') + '\n' + text);
+  return { rptId: id };
+}
+
+/** 報告の一覧（未確認すべて＋確認済みの新しい10件） */
+function listReports(p) {
+  checkPin_(p.pin);
+  const tz = Session.getScriptTimeZone();
+  const rows = tail_(SpreadsheetApp.openById(SS_ID).getSheetByName(SH_RPT), 9, 500).reverse();
+  const map = r => ({ rptId: r[0], d: r[1] instanceof Date ? Utilities.formatDate(r[1], tz, 'MM/dd HH:mm') : String(r[1]),
+    by: r[2], hb: r[4], text: r[5], st: r[6] });
+  return rows.filter(r => r[6] === '未確認').map(map).concat(rows.filter(r => r[6] !== '未確認').slice(0, 10).map(map));
+}
+
+function reportDone(p) {
+  checkPin_(p.pin);
+  const sh = SpreadsheetApp.openById(SS_ID).getSheetByName(SH_RPT);
+  const row = findRow_(sh, p.rptId);
+  if (!row) throw new Error('報告 ' + p.rptId + ' が見つかりません');
+  sh.getRange(row, 7, 1, 3).setValues([['確認済', new Date(), p.staff || '']]);
+  return { rptId: p.rptId };
+}
+
+/** ヘッダーの件数（未処理の変更依頼・未確認の報告・棚卸の状態） */
+function inbox_() {
+  const ss = SpreadsheetApp.openById(SS_ID);
+  const tk = getTk_();
+  return {
+    requests: tail_(ss.getSheetByName(SH_REQ), 11, 1000).filter(r => r[10] === '未処理').length,
+    reports: tail_(ss.getSheetByName(SH_RPT), 9, 500).filter(r => r[6] === '未確認').length,
+    tk: tk ? tk.status : ''
+  };
+}
+
+
+/* ================= 出荷リスト・QR出荷（2026-11-05〜） ================= */
+
+const SHIP_OPEN = ['新規', '未出荷'];   // 出荷できる状態
+
+/** 受注明細を読み、1行ずつの形にする（A納期 B製品ID C品番 D数量 E在庫数 F引当 G状態 H登録日 I備考 J出荷済数 K出荷記録） */
+function shipRows_(ss) {
+  const sh = ss.getSheetByName(SH_ORDER);
+  const last = sh.getLastRow();
+  if (last < 2) return [];
+  const tz = Session.getScriptTimeZone();
+  return sh.getRange(2, 1, last - 1, 11).getValues().map((r, i) => {
+    const d = r[0] instanceof Date ? r[0] : null;
+    const qty = Number(r[3]) || 0, done = Number(r[9]) || 0;
+    return {
+      row: i + 2,
+      k: d && r[1] !== '' ? Utilities.formatDate(d, tz, 'yyyyMMdd') + '-' + String(r[1]) : '',
+      ts: d ? d.getTime() : 9e15,
+      nouki: d ? Utilities.formatDate(d, tz, 'M/d') : String(r[0]),
+      id: String(r[1]), hb: String(r[2]), qty: qty, done: done, rem: qty - done,
+      hk: String(r[5]), st: String(r[6]), note: String(r[8]), rec: String(r[10])
+    };
+  });
+}
+
+/** 製品マスタの現在在庫（H列。空なら初期在庫G列） */
+function stockOf_(ss, pid) {
+  const m = ss.getSheetByName(SH_MASTER);
+  const row = findRow_(m, pid);
+  if (!row) return null;
+  const v = m.getRange(row, COL.INIT, 1, 2).getValues()[0];
+  return v[1] === '' ? (Number(v[0]) || 0) : Number(v[1]);
+}
+
+/** 出荷リスト（在庫から出す、未出荷の受注） */
+function shipList() {
+  const ss = SpreadsheetApp.openById(SS_ID);
+  const items = JSON.parse(getBootJson_(false)).items;
+  const stock = {};
+  items.forEach(it => stock[it.id] = it.stock);
+  return shipRows_(ss)
+    .filter(x => x.k && x.hk === '在庫' && SHIP_OPEN.indexOf(x.st) >= 0 && x.rem > 0)
+    .sort((a, b) => a.ts - b.ts || a.row - b.row)
+    .map(x => ({ k: x.k, row: x.row, nouki: x.nouki, id: x.id, hb: x.hb, qty: x.qty, done: x.done, rem: x.rem,
+      st: x.st, stock: stock[x.id] == null ? null : stock[x.id] }));
+}
+
+/** QRのキーに当たる行を探す（同じキーが複数あれば、残りのある最初の行） */
+function shipFind_(rows, k, row) {
+  const hits = rows.filter(x => x.k === String(k || ''));
+  if (!hits.length) return null;
+  if (row) {
+    const same = hits.find(x => x.row === Number(row));
+    if (same) return same;
+  }
+  return hits.find(x => x.rem > 0 && x.st !== '出荷済') || hits[0];
+}
+
+/** QRを読んだときの表示用 */
+function shipInfo(k) {
+  const ss = SpreadsheetApp.openById(SS_ID);
+  const x = shipFind_(shipRows_(ss), k);
+  if (!x) throw fail_('この出荷QRの受注が見つかりません（' + k + '）。受注明細から消えたか、納期・品番が変わった可能性があります');
+
+  // これまでの出荷（入出庫履歴のうち、この行を消し込んだもの）
+  const recs = x.rec.split(',').map(s => s.trim()).filter(s => s);
+  const tz = Session.getScriptTimeZone();
+  const hist = [];
+  if (recs.length) {
+    tail_(ss.getSheetByName(SH_LOG), 9, 3000).forEach(r => {
+      if (recs.indexOf(String(r[0])) < 0) return;
+      const a = parseAlloc_(r[8]).find(a => a.row === x.row);
+      if (!a) return;
+      hist.push({ rec: String(r[0]), d: r[1] instanceof Date ? Utilities.formatDate(r[1], tz, 'M/d HH:mm') : String(r[1]),
+        n: a.n, s: String(r[5] || '') });
+    });
+  }
+  return {
+    k: x.k, row: x.row, nouki: x.nouki, id: x.id, hb: x.hb, qty: x.qty, done: x.done, rem: Math.max(0, x.rem),
+    st: x.st, hk: x.hk, stock: stockOf_(ss, x.id),
+    shipped: x.st === '出荷済' || x.rem <= 0,
+    open: SHIP_OPEN.indexOf(x.st) >= 0 && x.rem > 0,
+    hist: hist
+  };
+}
+
+/** QRの受注を出庫する */
+function ship(p) {
+  const qty = Math.trunc(Number(p.qty));
+  if (!p.k || isNaN(qty) || qty < 1) throw fail_('出庫する数を1以上で入力してください');
+
+  const tk = getTk_();
+  if (tk && tk.status === '実施中') {
+    notify_('⛔ 棚卸中のため出荷できませんでした：QR ' + p.k + '　' + qty + '（' + (p.staff || '') + '）');
+    throw fail_('棚卸中のため出庫できません（棚卸の完了後に登録してください）');
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const ss = SpreadsheetApp.openById(SS_ID);
+    const x = shipFind_(shipRows_(ss), p.k, p.row);
+    if (!x) throw fail_('この出荷QRの受注が見つかりません（' + p.k + '）');
+    if (x.st === '出荷済' || x.rem <= 0) throw fail_('この受注は出荷済みです（' + x.hb + '　納期 ' + x.nouki + '）');
+    if (SHIP_OPEN.indexOf(x.st) < 0) throw fail_('この受注は状態が「' + x.st + '」のため出庫できません');
+    if (qty > x.rem) throw fail_('残り ' + x.rem + ' を超えています（入力 ' + qty + '）');
+
+    // 製品マスタの在庫を減らす
+    const m = ss.getSheetByName(SH_MASTER);
+    const mrow = findRow_(m, x.id);
+    if (!mrow) throw new Error('製品ID ' + x.id + ' がマスタにありません');
+    const v = m.getRange(mrow, COL.INIT, 1, 4).getValues()[0];   // G初期 H現在 I適正 J判定
+    const before = v[1] === '' ? (Number(v[0]) || 0) : Number(v[1]);
+    const after = before - qty;
+    m.getRange(mrow, COL.STOCK).setValue(after);
+    m.getRange(mrow, COL.JUDGE).setValue(judge_(after, v[2]));
+
+    // 入出庫履歴（受注出荷。消し込んだのはこの行だけ）
+    const now = new Date();
+    const log = ss.getSheetByName(SH_LOG);
+    const recId = 'LOG-' + String(log.getLastRow()).padStart(3, '0');
+    const note = 'QR出荷 納期' + x.nouki + (p.note ? ' ' + String(p.note).trim() : '');
+    log.appendRow([recId, now, x.id, '出庫', qty, p.staff || '', note, '受注出荷', fmtAlloc_([{ row: x.row, n: qty }])]);
+
+    // 受注明細（出荷済数・状態・出荷記録）
+    const done = x.done + qty;
+    writeConsumed_(ss.getSheetByName(SH_ORDER), CONSUME.ord, x.row, done, x.qty, x.rec, recId, now);
+    updateCache_(x.id, after, -qty, 0);
+
+    const who = '（' + (p.staff || '') + '・' + recId + '）';
+    if (after < 0) notify_('⚠️ 在庫がマイナスになりました：' + x.hb + '　' + before + ' → ' + after + who);
+    if (x.hk !== '在庫') notify_('⚠️ 引当「' + x.hk + '」の受注をQRで出荷：' + x.hb + '　納期 ' + x.nouki + '　' + qty + who);
+
+    return { k: x.k, row: x.row, id: x.id, hb: x.hb, stock: after, qty: x.qty, done: done,
+      rem: x.qty - done, st: done >= x.qty ? '出荷済' : '未出荷', rec: recId };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/* ================= Google Chat 通知 ================= */
+
+function notify_(text) {
+  const url = chatWebhook_();
+  if (!url) return;
+  try {
+    UrlFetchApp.fetch(url, {
+      method: 'post', contentType: 'application/json; charset=UTF-8',
+      payload: JSON.stringify({ text: '【LIXIL在庫】' + text }), muteHttpExceptions: true
+    });
+  } catch (e) {
+    console.error('Chat通知に失敗: ' + e.message);
+  }
+}
+
+/** 動作確認用：エディタから実行してChatに届くか見る */
+function testNotify() {
+  notify_('通知のテストです');
+}
+
+/**
+ * 受注明細に「在庫不足」列（L列）を作り、不足の行を赤くする（2026-10-30 本番に設定済み。消えたときの作り直し用）
+ *  - LAMBDA の引数に R・C など1文字の名前を使うと #N/A になるので長い名前にしている
+ *  - 状態「未出荷」・引当「在庫」の行を、同じ品番で納期の早い順に足していき、現在在庫を超えたら「不足 n」
+ */
+function setupShortageColumn() {
+  const ss = SpreadsheetApp.openById(SS_ID);
+  const sh = ss.getSheetByName(SH_ORDER);
+  if (sh.getMaxColumns() < 12) sh.insertColumnsAfter(sh.getMaxColumns(), 12 - sh.getMaxColumns());
+  sh.getRange('L1').setFormula(
+    '=VSTACK("在庫不足",LET(id,B2:B,st,G2:G,hk,F2:F,nk,A2:A,rem,ARRAYFORMULA(IFERROR(D2:D*1,0)-IFERROR(J2:J*1,0)),' +
+    'rw,ARRAYFORMULA(ROW(A2:A)),okk,ARRAYFORMULA((id<>"")*(st="未出荷")*(hk="在庫")),' +
+    'MAP(id,st,hk,nk,rem,rw,LAMBDA(pid,sts,hik,nki,rmn,rno,IF(OR(pid="",sts<>"未出荷",hik<>"在庫"),"",' +
+    'LET(zk,N(XLOOKUP(pid,\'製品マスタ\'!$A$2:$A$175,\'製品マスタ\'!$H$2:$H$175,0)),' +
+    'cum,SUMPRODUCT(okk,--(id=pid),(nk<nki)+(nk=nki)*(rw<=rno),rem),' +
+    'IF(cum>zk,"不足 "&MIN(rmn,cum-zk),"")))))))');
+  sh.getRange('L1').setFontWeight('bold');
+  const rule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=LEFT($L2,2)="不足"')
+    .setBackground('#F6C9C1').setFontColor('#9C1C0C').setBold(true)
+    .setRanges([sh.getRange('A2:L')]).build();
+  const rules = sh.getConditionalFormatRules().filter(r =>
+    !r.getBooleanCondition() || String(r.getBooleanCondition().getCriteriaValues()[0]).indexOf('$L2') < 0);
+  rules.unshift(rule);
+  sh.setConditionalFormatRules(rules);
 }
 
 /** シートの末尾 n 行を取得 */
