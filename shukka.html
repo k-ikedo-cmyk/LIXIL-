@@ -115,6 +115,8 @@ function load(){
     .finally(() => { $('#reload').disabled = false; });
 }
 
+const day0 = new URLSearchParams(location.search).get('day');
+if (day0) { $('#from').value = day0; $('#to').value = day0; }
 $('#from').addEventListener('change', render);
 $('#to').addEventListener('change', render);
 $('#reload').addEventListener('click', load);
