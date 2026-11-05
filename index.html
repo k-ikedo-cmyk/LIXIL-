@@ -171,6 +171,18 @@ body.tkmode .qty.zero{color:var(--mute)}
 .tkr-btns button{padding:13px;border:0;border-radius:8px;font-size:16px;font-weight:700}
 .tkr-btns .ok{background:var(--inv);color:#fff}.tkr-btns .ng{background:#E4E9ED}
 
+/* 出荷リスト（2026-11-05〜。1日分だけ表示） */
+#shipBar{display:flex;align-items:center;gap:10px;margin-top:8px;padding:8px 10px;border-radius:8px;background:#7A2E1F;font-size:14px;flex-wrap:wrap}
+#shipBar[hidden]{display:none}
+#shipBar select{font-size:17px;font-weight:700;padding:6px 8px;border:0;border-radius:6px;background:#fff;color:var(--ink)}
+#shipSum{font-size:14px}
+#list li.shipHead{background:#F8E3DE;font-weight:700;font-size:16px;padding:11px 14px;border-bottom:1px solid #E6C4BC;cursor:default;position:sticky;top:var(--hdr,98px);z-index:2}
+#list li.shipHead span{margin-left:auto;font-size:14px;font-weight:400;color:var(--sub)}
+.qty small{display:block;font-size:11px;font-weight:400;color:var(--sub);margin-top:3px}
+.tag.part{background:#E3ECF5;color:var(--inv)}
+.tag.lack{background:#F6DAD4;color:var(--out)}
+.tag.new{background:#E4E9ED;color:var(--sub)}
+
 /* QR出荷（2026-11-04〜） */
 #ship{position:fixed;left:0;right:0;bottom:0;z-index:11;background:var(--panel);border-radius:14px 14px 0 0;
   padding:16px 16px calc(16px + env(safe-area-inset-bottom));max-width:640px;margin:0 auto;
@@ -223,15 +235,20 @@ body.tkmode .qty.zero{color:var(--mute)}
     <button class="chip n-only" data-f="stock">在庫あり</button>
     <button class="chip n-only" data-f="zero">在庫0</button>
     <button class="chip n-only" data-f="short">不足</button>
+    <button class="chip n-only" data-f="ship">出荷リスト</button>
     <button class="chip tk-only" data-f="tkTodoStock">在庫有未棚卸</button>
     <button class="chip tk-only" data-f="tkTodo">未棚卸</button>
     <button class="chip tk-only" data-f="tkDone">棚卸済</button>
     <button id="qrBtn" class="hbtn n-only">QR出荷</button>
-    <button id="listBtn" class="hbtn n-only">出荷リスト</button>
     <button id="rptBtn" class="hbtn">報告</button>
     <button id="admBtn" class="hbtn">管理<span id="admN"></span></button>
     <button id="tkBtn" class="hbtn tkb n-only">棚卸開始</button>
     <span id="count"></span>
+  </div>
+  <div id="shipBar" hidden>
+    <label>納期 <select id="shipDay"></select></label>
+    <span id="shipSum"></span>
+    <button id="shipPrint" class="tkbtn2">印刷</button>
   </div>
   <div id="tkBanner" hidden>
     <b id="tkTitle"></b><span id="tkText"></span>
@@ -437,6 +454,7 @@ function rowHtml(it){
 }
 
 function render(){
+  if (filter === 'ship' && !inTk()) return renderShip();
   const q = norm($('#q').value);
   const rows = items.filter(it => (!q || it.key.includes(q)) && pass(it));
   $('#count').textContent = rows.length + '件';
@@ -834,6 +852,7 @@ function setTk(v){
   if (mode !== lastMode) {   /* 絞り込みをモードに合わせて戻す */
     lastMode = mode;
     filter = mode ? 'tkTodoStock' : 'all';
+    updShipBar();
     document.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c.dataset.f === filter));
     if (!mode && $('#tks').classList.contains('on')) closeTk();
   }
@@ -981,6 +1000,68 @@ function sendReport(){
     .finally(() => { $('#rSend').disabled = false; $('#rSend').textContent = '報告を送る'; });
 }
 
+/* ===== 出荷リスト（タブ。1日分だけ表示して、選んだ受注を出庫。2026-11-05〜） =====
+ * パレットには1日分しか載せないので、納期は1日だけ選ぶ。
+ * 行を押すと QR出荷と同じ出庫画面が開く（数量の初期値は残り。分納できる）。 */
+let shipRows = null, shipDay = '', shipBusyLoad = false;
+try { shipDay = localStorage.getItem('zaiko_shipday') || ''; } catch(e) {}
+const dayOf = k => String(k).slice(0, 8);
+const dayLabel = d => `${+d.slice(4, 6)}/${+d.slice(6, 8)}`;
+const todayKey = () => { const t = new Date(); return '' + t.getFullYear() + String(t.getMonth() + 1).padStart(2, '0') + String(t.getDate()).padStart(2, '0'); };
+function updShipBar(){
+  $('#shipBar').hidden = !(filter === 'ship' && !inTk());
+  requestAnimationFrame(fitHeader);
+}
+function loadShipList(){
+  shipBusyLoad = true;
+  if (!shipRows) render();
+  return apiGet({ action: 'shipList' })
+    .then(d => { shipRows = d; fillShipDays(); })
+    .catch(e => toast(`出荷リストを読み込めませんでした：${e.message}`, true))
+    .finally(() => { shipBusyLoad = false; render(); });
+}
+function fillShipDays(){
+  const days = [...new Set(shipRows.map(r => dayOf(r.k)))].sort();
+  const today = todayKey();
+  if (!days.includes(shipDay)) shipDay = days.find(d => d >= today) || days[days.length - 1] || '';
+  $('#shipDay').innerHTML = days.length ? days.map(d => {
+    const n = shipRows.filter(r => dayOf(r.k) === d).length;
+    return `<option value="${d}">${dayLabel(d)}（${n}件）${d < today ? ' 納期超過' : d === today ? ' 今日' : ''}</option>`;
+  }).join('') : '<option value="">出荷する受注なし</option>';
+  $('#shipDay').value = shipDay;
+}
+function renderShip(){
+  if (!shipRows) {
+    $('#count').textContent = '';
+    $('#list').innerHTML = `<li class="empty">${shipBusyLoad ? '出荷リストを読み込み中…' : '出荷リストを読み込めませんでした。「更新」を押してください'}</li>`;
+    $('#shipSum').textContent = '';
+    return;
+  }
+  const q = norm($('#q').value);
+  const day = shipRows.filter(r => dayOf(r.k) === shipDay);
+  // 在庫不足：同じ品番を、選んだ日より前の未出荷分も含めて納期順に足して現在在庫を超えたら
+  const need = {};
+  shipRows.filter(r => dayOf(r.k) < shipDay).forEach(r => need[r.id] = (need[r.id] || 0) + r.rem);
+  const rows = day.map(r => {
+    const it = byId[r.id] || {};
+    const stock = it.stock != null ? it.stock : r.stock;
+    need[r.id] = (need[r.id] || 0) + r.rem;
+    return Object.assign({}, r, { stock, w: it.w, h: it.h, lack: stock != null && need[r.id] > stock,
+      key: norm(r.hb) });
+  }).filter(r => !q || r.key.includes(q)).sort((a, b) => a.hb < b.hb ? -1 : a.hb > b.hb ? 1 : a.row - b.row);
+  const sumQty = day.reduce((s, r) => s + r.qty, 0), sumRem = day.reduce((s, r) => s + r.rem, 0);
+  $('#shipSum').textContent = shipDay ? `${day.length}件　注文 ${sumQty}　残り ${sumRem}枚` : '';
+  $('#count').textContent = rows.length + '件';
+  if (!shipDay) { $('#list').innerHTML = '<li class="empty">在庫から出荷する未出荷の受注はありません</li>'; return; }
+  if (!rows.length) { $('#list').innerHTML = '<li class="empty">該当する品番がありません</li>'; return; }
+  $('#list').innerHTML = `<li class="shipHead">納期 ${dayLabel(shipDay)} の出荷<span>品番を押すと出庫できます</span></li>` +
+    rows.map(r => `<li data-ship="${esc(r.k)}">
+      <div><div class="hb">${esc(r.hb)}${r.st === '新規' ? '<span class="tag new">新規</span>' : ''}${
+        r.done > 0 ? `<span class="tag part">分納 ${r.done}済</span>` : ''}${r.lack ? '<span class="tag lack">在庫不足</span>' : ''}</div>
+      <div class="meta">注文 ${r.qty}　出荷済 ${r.done}　在庫 ${r.stock == null ? '—' : r.stock}${r.w ? `　${esc(r.w)}×${esc(r.h)}` : ''}</div></div>
+      <div class="qty">${r.rem}<small>残り</small></div></li>`).join('');
+}
+
 /* ===== QR出荷（出荷リストのQR → 受注1行の出庫。2026-11-04〜） ===== */
 let shp = null, shpBusy = false;
 function openShip(k){
@@ -1069,6 +1150,7 @@ function shipGo(){
       if (it) { it.stock = r.stock; it.ord = Math.max(0, (it.ord || 0) - n); render(); saveCache(); }
       $('#shpNote').value = '';
       toast(`出庫しました　${r.hb} ${n}枚（在庫 ${r.stock}）`);
+      if (filter === 'ship') loadShipList();
       return apiGet({ action: 'shipInfo', k: d.k }).then(info => {
         showShip(info);
         setShipMsg(r.rem > 0 ? `✓ ${n}枚 出庫しました。残り ${r.rem}` : `✓ ${n}枚 出庫しました。この受注は出荷済みです`, 'done');
@@ -1185,9 +1267,11 @@ $('#chips').addEventListener('click', e => {
   const b = e.target.closest('.chip'); if (!b) return;
   filter = b.dataset.f;
   document.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c === b));
-  render();
+  updShipBar();
+  if (filter === 'ship') loadShipList(); else render();
 });
 $('#list').addEventListener('click', e => {
+  const sh = e.target.closest('li[data-ship]'); if (sh) return openShip(sh.dataset.ship);
   const g = e.target.closest('li.grp'); if (g) return toggleGroup(g.dataset.g);
   const li = e.target.closest('li[data-id]'); if (li) openSheet(byId[li.dataset.id]);
 });
@@ -1233,7 +1317,6 @@ $('#alist').addEventListener('click', e => {
   else if (e.target.closest('.ng') && confirm('この依頼を却下しますか？')) decide(li, '却下');
 });
 $('#qrBtn').addEventListener('click', openScan);
-$('#listBtn').addEventListener('click', () => { location.href = 'shukka.html' + (TEST ? '?test' : ''); });
 $('#scanClose').addEventListener('click', closeScan);
 $('#shpScan').addEventListener('click', openScan);
 $('#shpClose').addEventListener('click', closeShip);
@@ -1243,7 +1326,13 @@ $('#shpPlus').addEventListener('click', () => shipStep(1));
 $('#shpNum').addEventListener('input', checkShip);
 $('#shpNum').addEventListener('focus', e => e.target.select());
 $('#hist').addEventListener('toggle', loadHistory);
-$('#reload').addEventListener('click', () => reload(false, true));
+$('#reload').addEventListener('click', () => { reload(false, true); if (filter === 'ship') loadShipList(); });
+$('#shipDay').addEventListener('change', e => { shipDay = e.target.value; try { localStorage.setItem('zaiko_shipday', shipDay); } catch(x) {} render(); });
+$('#shipPrint').addEventListener('click', () => {
+  if (!shipDay) return toast('納期を選んでください', true);
+  const d = shipDay.slice(0, 4) + '-' + shipDay.slice(4, 6) + '-' + shipDay.slice(6, 8);
+  window.open('shukka.html?day=' + d + (TEST ? '&test' : ''), '_blank');
+});
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeSheet(); closeAdmin(); closeTk(); closeReport(); closeShip(); closeScan(); } });
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && Date.now() - lastLoad > 60000) reload(true);
