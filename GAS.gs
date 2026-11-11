@@ -28,6 +28,11 @@
  *  - 「報告」で現場からテキストを送ると「報告」シートに記録し、Google Chatに通知
  *  - 変更依頼・棚卸の開始／完了／確定・棚卸中の入出庫の試み・在庫マイナス・受注残超えの出荷・エラーもChatに通知
  *
+ * まとめて出荷（2026-11-11〜）
+ *  - 出荷リストのタブでチェックした受注を1回でまとめて出庫（紙のリストでピッキングした後に事務所から登録する用）
+ *  - 1件でも出庫できない行（出荷済み・残り超え・行の変更など）があれば、1件も出庫せずに理由を返す
+ *  - 入出庫履歴は受注1行につき1行（QR出荷と同じ形。備考は「まとめて出荷 納期m/d」）
+ *
  * 出荷リスト・QR出荷（2026-11-05〜）
  *  - 出荷リスト（shukka.html）：受注明細の 引当「在庫」・状態「新規／未出荷」・残り（数量−出荷済数）がある行をQR付きで印刷
  *  - QRの中身：在庫アプリのURL ＋ ?ship=納期yyyymmdd-製品ID（例 ...index.html?ship=20261106-38）
@@ -117,6 +122,7 @@ function doPost(e) {
     if (action === 'tkReturn') return json_({ ok: true, data: tkReturn(p) });
     if (action === 'tkAbort') return json_({ ok: true, data: tkAbort(p) });
     if (action === 'ship') return json_({ ok: true, data: ship(p) });
+    if (action === 'shipBatch') return json_({ ok: true, data: shipBatch(p) });
     throw new Error('不明な操作です: ' + action);
   } catch (err) {
     if (!err.quiet) notify_('⚠️ エラー：' + err.message + '（操作 ' + (p.action || 'register') +
@@ -1142,6 +1148,116 @@ function ship(p) {
 
     return { k: x.k, row: x.row, id: x.id, hb: x.hb, stock: after, qty: x.qty, done: done,
       rem: x.qty - done, st: done >= x.qty ? '出荷済' : '未出荷', rec: recId };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * まとめて出荷（2026-11-11〜）
+ * p.items = [{ k: 'yyyyMMdd-製品ID', row: 受注明細の行, qty: 出庫数 }, ...]
+ * 先に全部を確かめ、1件でもだめなら何も書かずにエラーを返す（一部だけ出庫されることはない）
+ */
+function shipBatch(p) {
+  const list = Array.isArray(p.items) ? p.items : [];
+  if (!list.length) throw fail_('出荷する受注を選んでください');
+  if (list.length > 200) throw fail_('一度に出荷できるのは200件までです');
+
+  const tk = getTk_();
+  if (tk && tk.status === '実施中') {
+    notify_('⛔ 棚卸中のためまとめて出荷できませんでした：' + list.length + '件（' + (p.staff || '') + '）');
+    throw fail_('棚卸中のため出庫できません（棚卸の完了後に登録してください）');
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const ss = SpreadsheetApp.openById(SS_ID);
+    const rows = shipRows_(ss);
+    const byRow = {};
+    rows.forEach(x => byRow[x.row] = x);
+
+    // 1) 全部を確かめる
+    const errs = [], todo = [], seen = {};
+    list.forEach(it => {
+      const qty = Math.trunc(Number(it.qty));
+      const x = byRow[Number(it.row)];
+      const name = x ? x.hb + '（納期 ' + x.nouki + '）' : String(it.k);
+      if (!x || x.k !== String(it.k || '')) { errs.push(name + '：受注明細の行が変わっています。更新してください'); return; }
+      if (seen[x.row]) { errs.push(name + '：同じ受注が2回選ばれています'); return; }
+      seen[x.row] = 1;
+      if (isNaN(qty) || qty < 1) { errs.push(name + '：出庫する数を1以上にしてください'); return; }
+      if (x.st === '出荷済' || x.rem <= 0) { errs.push(name + '：すでに出荷済みです'); return; }
+      if (SHIP_OPEN.indexOf(x.st) < 0) { errs.push(name + '：状態が「' + x.st + '」のため出庫できません'); return; }
+      if (qty > x.rem) { errs.push(name + '：残り ' + x.rem + ' を超えています（' + qty + '）'); return; }
+      todo.push({ x: x, qty: qty });
+    });
+    if (errs.length) throw fail_('出庫しませんでした（' + errs.length + '件に問題があります）\n' +
+      errs.slice(0, 10).join('\n') + (errs.length > 10 ? '\nほか ' + (errs.length - 10) + '件' : ''));
+
+    // 2) 製品マスタ（1回で読む）
+    const m = ss.getSheetByName(SH_MASTER);
+    const mv = m.getRange(2, 1, m.getLastRow() - 1, COL.JUDGE).getValues();
+    const mi = {};
+    mv.forEach((r, i) => { if (r[0] !== '') mi[String(r[0])] = i; });
+    const stock = {}, before = {}, hb = {};
+    todo.forEach(t => {
+      const i = mi[t.x.id];
+      if (i == null) throw new Error('製品ID ' + t.x.id + ' がマスタにありません（' + t.x.hb + '）');
+      if (stock[t.x.id] == null) {
+        const r = mv[i];
+        stock[t.x.id] = before[t.x.id] = r[COL.STOCK - 1] === '' ? (Number(r[COL.INIT - 1]) || 0) : Number(r[COL.STOCK - 1]);
+        hb[t.x.id] = t.x.hb;
+      }
+      stock[t.x.id] -= t.qty;
+    });
+
+    // 3) 入出庫履歴（受注1行につき1行をまとめて書く）
+    const now = new Date();
+    const log = ss.getSheetByName(SH_LOG);
+    const base = log.getLastRow();
+    const extra = p.note ? ' ' + String(p.note).trim() : '';
+    todo.forEach((t, j) => t.rec = 'LOG-' + String(base + j).padStart(3, '0'));
+    log.getRange(base + 1, 1, todo.length, 9).setValues(todo.map(t => [
+      t.rec, now, t.x.id, '出庫', t.qty, p.staff || '', 'まとめて出荷 納期' + t.x.nouki + extra, '受注出荷',
+      fmtAlloc_([{ row: t.x.row, n: t.qty }])
+    ]));
+
+    // 4) 製品マスタの在庫・判定
+    Object.keys(stock).forEach(id => {
+      const i = mi[id], row = i + 2;
+      m.getRange(row, COL.STOCK).setValue(stock[id]);
+      m.getRange(row, COL.JUDGE).setValue(judge_(stock[id], mv[i][COL.TARGET - 1]));
+    });
+
+    // 5) 受注明細（出荷済数・状態・出荷記録）
+    const osh = ss.getSheetByName(SH_ORDER);
+    todo.forEach(t => {
+      t.done = t.x.done + t.qty;
+      writeConsumed_(osh, CONSUME.ord, t.x.row, t.done, t.x.qty, t.x.rec, t.rec, now);
+    });
+
+    // 6) キャッシュ（在庫・受注残）
+    const dOrd = {};
+    todo.forEach(t => dOrd[t.x.id] = (dOrd[t.x.id] || 0) + t.qty);
+    Object.keys(stock).forEach(id => updateCache_(id, stock[id], -dOrd[id], 0));
+    SpreadsheetApp.flush();
+
+    // 7) 通知
+    const total = todo.reduce((s, t) => s + t.qty, 0);
+    const days = [...new Set(todo.map(t => t.x.nouki))].join('・');
+    let msg = '🚚 まとめて出荷：納期 ' + days + '　' + todo.length + '件・計 ' + total + '枚（' + (p.staff || '') + '）';
+    const neg = Object.keys(stock).filter(id => stock[id] < 0);
+    if (neg.length) msg += '\n⚠️ 在庫がマイナスになった品番：' + neg.map(id => hb[id] + ' ' + before[id] + '→' + stock[id]).join('、');
+    const part = todo.filter(t => t.done < t.x.qty);
+    if (part.length) msg += '\n分納（残りあり）：' + part.map(t => t.x.hb + ' 残り' + (t.x.qty - t.done)).join('、');
+    notify_(msg);
+
+    return {
+      n: todo.length, total: total, stocks: stock,
+      results: todo.map(t => ({ k: t.x.k, row: t.x.row, id: t.x.id, hb: t.x.hb, qty: t.qty, done: t.done,
+        rem: t.x.qty - t.done, st: t.done >= t.x.qty ? '出荷済' : '未出荷', rec: t.rec }))
+    };
   } finally {
     lock.releaseLock();
   }

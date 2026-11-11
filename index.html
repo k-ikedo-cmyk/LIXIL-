@@ -183,6 +183,31 @@ body.tkmode .qty.zero{color:var(--mute)}
 .tag.lack{background:#F6DAD4;color:var(--out)}
 .tag.new{background:#E4E9ED;color:var(--sub)}
 
+/* まとめて出荷（2026-11-11〜。チェックした受注を一括で出庫） */
+#list li.shipRow{gap:10px;padding:9px 12px}
+#list li.shipRow.sel{background:#FFF1EC}
+.ck{flex:none;width:32px;height:32px;border:2px solid #9AA7B2;border-radius:7px;display:grid;place-items:center;
+  font-size:21px;font-weight:700;color:#fff;background:#fff}
+li.sel .ck{background:var(--out);border-color:var(--out)}
+li.sel .ck::after{content:'✓'}
+.bq{margin-left:auto;text-align:center;flex:none}
+.bq input{width:70px;font-size:24px;font-weight:700;text-align:center;border:2px solid var(--line);border-radius:8px;
+  padding:3px 2px;font-variant-numeric:tabular-nums;background:#fff}
+li.sel .bq input{border-color:var(--out)}
+.bq input.part{color:var(--inv)}
+.bq small{display:block;font-size:11px;color:var(--sub);margin-top:2px}
+.det{flex:none;border:1px solid var(--line);background:#fff;border-radius:6px;padding:7px 8px;font-size:13px;color:var(--sub)}
+#bulkBar{position:fixed;left:0;right:0;bottom:0;z-index:6;background:var(--ink);color:#fff;display:flex;gap:8px;
+  align-items:center;flex-wrap:wrap;padding:10px 12px calc(10px + env(safe-area-inset-bottom));box-shadow:0 -2px 8px #0003}
+#bulkBar[hidden]{display:none}
+#bulkBar .sm{border:1px solid #ffffff66;background:none;color:#fff;border-radius:8px;padding:8px 12px;font-size:14px}
+#bulkBar select{font-size:15px;padding:7px 6px;border:0;border-radius:6px;background:#fff;color:var(--ink)}
+#bulkSum{font-size:15px;font-weight:700;margin-left:auto;font-variant-numeric:tabular-nums}
+#bulkGo{border:0;border-radius:10px;padding:12px 18px;font-size:18px;font-weight:700;background:var(--out);color:#fff}
+#bulkGo:disabled{opacity:.4}
+body.shipmode #list{padding-bottom:96px}
+body.shipmode #toast:not(.top){bottom:96px}
+
 /* QR出荷（2026-11-04〜） */
 #ship{position:fixed;left:0;right:0;bottom:0;z-index:11;background:var(--panel);border-radius:14px 14px 0 0;
   padding:16px 16px calc(16px + env(safe-area-inset-bottom));max-width:640px;margin:0 auto;
@@ -260,6 +285,14 @@ body.tkmode .qty.zero{color:var(--mute)}
 </header>
 
 <ul id="list"></ul>
+
+<div id="bulkBar" hidden>
+  <button id="bulkAll" class="sm">全部選ぶ</button>
+  <button id="bulkNone" class="sm">全部外す</button>
+  <select id="bulkStaff" aria-label="担当者"></select>
+  <span id="bulkSum">0件</span>
+  <button id="bulkGo" disabled>まとめて出荷</button>
+</div>
 
 <div id="mask"></div>
 <section id="sheet" data-t="入庫" aria-hidden="true">
@@ -625,7 +658,7 @@ function start(boot){
   const keep = $('#staff').value;
   let pick = keep;
   if (!pick) { try { pick = localStorage.getItem('zaiko_staff'); } catch(e) {} }
-  ['#staff', '#tStaff', '#shpStaff'].forEach(id => {
+  ['#staff', '#tStaff', '#shpStaff', '#bulkStaff'].forEach(id => {
     const sel = $(id);
     sel.innerHTML = staffList.map(s => `<option>${esc(s)}</option>`).join('');
     if (pick && staffList.includes(pick)) sel.value = pick;
@@ -1009,7 +1042,10 @@ const dayOf = k => String(k).slice(0, 8);
 const dayLabel = d => `${+d.slice(4, 6)}/${+d.slice(6, 8)}`;
 const todayKey = () => { const t = new Date(); return '' + t.getFullYear() + String(t.getMonth() + 1).padStart(2, '0') + String(t.getDate()).padStart(2, '0'); };
 function updShipBar(){
-  $('#shipBar').hidden = !(filter === 'ship' && !inTk());
+  const on = filter === 'ship' && !inTk();
+  $('#shipBar').hidden = !on;
+  $('#bulkBar').hidden = !on;
+  document.body.classList.toggle('shipmode', on);
   requestAnimationFrame(fitHeader);
 }
 function loadShipList(){
@@ -1054,12 +1090,95 @@ function renderShip(){
   $('#count').textContent = rows.length + '件';
   if (!shipDay) { $('#list').innerHTML = '<li class="empty">在庫から出荷する未出荷の受注はありません</li>'; return; }
   if (!rows.length) { $('#list').innerHTML = '<li class="empty">該当する品番がありません</li>'; return; }
-  $('#list').innerHTML = `<li class="shipHead">納期 ${dayLabel(shipDay)} の出荷<span>品番を押すと出庫できます</span></li>` +
-    rows.map(r => `<li data-ship="${esc(r.k)}">
+  $('#list').innerHTML = `<li class="shipHead">納期 ${dayLabel(shipDay)} の出荷<span>チェックして下の「まとめて出荷」</span></li>` +
+    rows.map(r => {
+      const key = selKey(r), on = sel.has(key);
+      const n = on ? Math.min(sel.get(key), r.rem) : r.rem;
+      return `<li class="shipRow${on ? ' sel' : ''}" data-key="${esc(key)}">
+      <span class="ck" aria-hidden="true"></span>
       <div><div class="hb">${esc(r.hb)}${r.st === '新規' ? '<span class="tag new">新規</span>' : ''}${
         r.done > 0 ? `<span class="tag part">分納 ${r.done}済</span>` : ''}${r.lack ? '<span class="tag lack">在庫不足</span>' : ''}</div>
       <div class="meta">注文 ${r.qty}　出荷済 ${r.done}　在庫 ${r.stock == null ? '—' : r.stock}${r.w ? `　${esc(r.w)}×${esc(r.h)}` : ''}</div></div>
-      <div class="qty">${r.rem}<small>残り</small></div></li>`).join('');
+      <div class="bq"><input class="bqn${n < r.rem ? ' part' : ''}" type="number" inputmode="numeric" min="1" max="${r.rem}" value="${n}"
+        aria-label="出庫する数"><small>残り ${r.rem}</small></div>
+      <button class="det" data-ship="${esc(r.k)}">詳細</button></li>`;
+    }).join('');
+  updBulk();
+}
+
+/* ===== まとめて出荷（2026-11-11〜） =====
+ * 紙の出荷リストでピッキングした後、事務所などからチェックした受注をまとめて出庫する。
+ * 数は初期値が残り。少なくすると分納（残りは出荷リストに残る）。 */
+const sel = new Map();   // 'k|row' → 出庫する数
+const selKey = r => r.k + '|' + r.row;
+const dayShipRows = () => (shipRows || []).filter(r => dayOf(r.k) === shipDay);
+function updBulk(){
+  const rows = dayShipRows().filter(r => sel.has(selKey(r)));
+  const n = rows.reduce((s, r) => s + (parseInt(sel.get(selKey(r)), 10) || 0), 0);
+  $('#bulkSum').textContent = rows.length ? `${rows.length}件・計 ${n}枚` : '未選択';
+  $('#bulkGo').disabled = !rows.length || bulkBusy || tk.status === '実施中';
+  $('#bulkGo').textContent = bulkBusy ? '出庫中…' : 'まとめて出荷';
+}
+function toggleSel(li, force){
+  const r = dayShipRows().find(x => selKey(x) === li.dataset.key);
+  if (!r) return;
+  const key = selKey(r);
+  const on = force != null ? force : !sel.has(key);
+  const inp = li.querySelector('.bqn');
+  if (on) sel.set(key, Math.min(r.rem, Math.max(1, parseInt(inp.value, 10) || r.rem))); else sel.delete(key);
+  li.classList.toggle('sel', on);
+  updBulk();
+}
+function bulkQty(inp){
+  const li = inp.closest('li.shipRow');
+  const r = dayShipRows().find(x => selKey(x) === li.dataset.key);
+  if (!r) return;
+  const v = parseInt(inp.value, 10);
+  inp.classList.toggle('part', v >= 1 && v < r.rem);
+  if (isNaN(v) || v < 1 || v > r.rem) { inp.style.borderColor = 'var(--out)'; sel.delete(selKey(r)); li.classList.remove('sel'); }
+  else { inp.style.borderColor = ''; sel.set(selKey(r), v); li.classList.add('sel'); }
+  updBulk();
+}
+function bulkAll(on){
+  document.querySelectorAll('#list li.shipRow').forEach(li => toggleSel(li, on));
+}
+let bulkBusy = false;
+function bulkGo(){
+  if (bulkBusy) return;
+  if (tk.status === '実施中') return toast('棚卸中のため出庫できません（棚卸の完了後に出庫してください）', true);
+  const rows = dayShipRows().filter(r => sel.has(selKey(r)));
+  if (!rows.length) return toast('出荷する受注にチェックを入れてください', true);
+  const pick = rows.map(r => ({ r, n: parseInt(sel.get(selKey(r)), 10) || 0 }));
+  const bad = pick.filter(x => x.n < 1 || x.n > x.r.rem);
+  if (bad.length) return toast(`${bad[0].r.hb}：数は1〜${bad[0].r.rem}で入力してください`, true);
+  const total = pick.reduce((s, x) => s + x.n, 0);
+  // 在庫が足りない品番（同じ品番は足して見る）
+  const use = {};
+  pick.forEach(x => use[x.r.id] = (use[x.r.id] || 0) + x.n);
+  const short = Object.keys(use).filter(id => byId[id] && byId[id].stock < use[id])
+    .map(id => `${byId[id].hb}：在庫 ${byId[id].stock} に対して ${use[id]}`);
+  const lines = pick.slice(0, 20).map(x => `・${x.r.hb}　${x.n}枚${x.n < x.r.rem ? `（分納・残り ${x.r.rem - x.n}）` : ''}`);
+  const staff = $('#bulkStaff').value;
+  const msg = `納期 ${dayLabel(shipDay)} の ${pick.length}件・計 ${total}枚を出庫します。\n\n` + lines.join('\n') +
+    (pick.length > 20 ? `\nほか ${pick.length - 20}件` : '') +
+    (short.length ? `\n\n⚠ 在庫が足りなくなります（マイナスになります）\n${short.join('\n')}` : '') +
+    `\n\n担当：${staff}\nよろしいですか？`;
+  if (!confirm(msg)) return;
+  $('#staff').value = staff;
+  try { localStorage.setItem('zaiko_staff', staff); } catch(e) {}
+  bulkBusy = true; updBulk();
+  apiPost({ action: 'shipBatch', staff, items: pick.map(x => ({ k: x.r.k, row: x.r.row, qty: x.n })) })
+    .then(res => {
+      Object.keys(res.stocks).forEach(id => { const it = byId[id]; if (it) it.stock = res.stocks[id]; });
+      res.results.forEach(x => { const it = byId[x.id]; if (it) it.ord = Math.max(0, (it.ord || 0) - x.qty); });
+      saveCache();
+      sel.clear();
+      const part = res.results.filter(x => x.rem > 0).length;
+      toast(`まとめて出荷しました　${res.n}件・計 ${res.total}枚${part ? `（分納 ${part}件は残りあり）` : ''}`);
+      return loadShipList();
+    })
+    .catch(e => { alert('出荷できませんでした\n\n' + e.message); loadShipList(); })
+    .finally(() => { bulkBusy = false; updBulk(); });
 }
 
 /* ===== QR出荷（出荷リストのQR → 受注1行の出庫。2026-11-04〜） ===== */
@@ -1271,6 +1390,9 @@ $('#chips').addEventListener('click', e => {
   if (filter === 'ship') loadShipList(); else render();
 });
 $('#list').addEventListener('click', e => {
+  const det = e.target.closest('.det[data-ship]'); if (det) return openShip(det.dataset.ship);
+  if (e.target.closest('.bqn')) return;
+  const sr = e.target.closest('li.shipRow'); if (sr) return toggleSel(sr);
   const sh = e.target.closest('li[data-ship]'); if (sh) return openShip(sh.dataset.ship);
   const g = e.target.closest('li.grp'); if (g) return toggleGroup(g.dataset.g);
   const li = e.target.closest('li[data-id]'); if (li) openSheet(byId[li.dataset.id]);
@@ -1317,6 +1439,12 @@ $('#alist').addEventListener('click', e => {
   else if (e.target.closest('.ng') && confirm('この依頼を却下しますか？')) decide(li, '却下');
 });
 $('#qrBtn').addEventListener('click', openScan);
+$('#list').addEventListener('input', e => { if (e.target.classList.contains('bqn')) bulkQty(e.target); });
+$('#list').addEventListener('focusin', e => { if (e.target.classList.contains('bqn')) e.target.select(); });
+$('#bulkAll').addEventListener('click', () => bulkAll(true));
+$('#bulkNone').addEventListener('click', () => bulkAll(false));
+$('#bulkGo').addEventListener('click', bulkGo);
+$('#bulkStaff').addEventListener('change', e => { $('#staff').value = e.target.value; try { localStorage.setItem('zaiko_staff', e.target.value); } catch(x) {} });
 $('#scanClose').addEventListener('click', closeScan);
 $('#shpScan').addEventListener('click', openScan);
 $('#shpClose').addEventListener('click', closeShip);
@@ -1327,7 +1455,7 @@ $('#shpNum').addEventListener('input', checkShip);
 $('#shpNum').addEventListener('focus', e => e.target.select());
 $('#hist').addEventListener('toggle', loadHistory);
 $('#reload').addEventListener('click', () => { reload(false, true); if (filter === 'ship') loadShipList(); });
-$('#shipDay').addEventListener('change', e => { shipDay = e.target.value; try { localStorage.setItem('zaiko_shipday', shipDay); } catch(x) {} render(); });
+$('#shipDay').addEventListener('change', e => { sel.clear(); shipDay = e.target.value; try { localStorage.setItem('zaiko_shipday', shipDay); } catch(x) {} render(); });
 $('#shipPrint').addEventListener('click', () => {
   if (!shipDay) return toast('納期を選んでください', true);
   const d = shipDay.slice(0, 4) + '-' + shipDay.slice(4, 6) + '-' + shipDay.slice(6, 8);
